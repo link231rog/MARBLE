@@ -21,11 +21,14 @@ from .heuristic import (
     HeuristicController,
     PrivateOnlyController,
 )
+from .local_policy import LocalPolicyController, features
 
 __all__ = [
     "AbsentController",
     "GlobalAlwaysController",
     "HeuristicController",
+    "LocalPolicyController",
     "MemoryController",
     "PrivateOnlyController",
+    "features",
 ]
