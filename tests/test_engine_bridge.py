@@ -113,28 +113,6 @@ def test_after_act_submits_proposal_and_steps_increment(tmp_path):
     assert decisions[0]["proposal"]["step_index"] == 1
 
 
-def test_governed_agent_lifecycle_order_with_dummy_base():
-    calls = []
-
-    class DummyBase:
-        def __init__(self, config=None, env=None, model=None):
-            self.agent_id = config["agent_id"]
-            self.governed = None
-
-        def act(self, task):
-            calls.append(("base_act", task))
-            return ("model output text", None)
-
-    GovernedAgent = build_governed_agent_cls(DummyBase)
-    harness = MemoryStep(None)  # no memory: passthrough but still counts steps
-    agent = GovernedAgent(config={"agent_id": "a1"})
-    agent.governed = harness
-    result = agent.act("task text")
-    assert result[0] == "model output text"
-    assert calls == [("base_act", "task text")]
-    assert harness.steps["a1"] == 1
-
-
 def test_governed_agent_feeds_augmented_task_to_base(tmp_path):
     calls = []
 

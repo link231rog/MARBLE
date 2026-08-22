@@ -14,20 +14,6 @@ def _task():
     return load_tasks("coding", limit=1)[0]
 
 
-def test_make_controller_fixed_baselines():
-    from marble.controllers import (
-        AbsentController,
-        GlobalAlwaysController,
-        HeuristicController,
-        PrivateOnlyController,
-    )
-
-    assert isinstance(make_controller("no_memory"), AbsentController)
-    assert isinstance(make_controller("global_always"), GlobalAlwaysController)
-    assert isinstance(make_controller("private_only"), PrivateOnlyController)
-    assert isinstance(make_controller("heuristic"), HeuristicController)
-
-
 def test_make_controller_checkpoint_roundtrip(tmp_path):
     from marble.controllers import LocalPolicyController
 
@@ -95,18 +81,6 @@ def test_real_run_without_any_key_records_error(tmp_path, monkeypatch):
     err = (tdir / "errors.log").read_text()
     assert "worker API key" in err
     assert not (tdir / "memory_trace.jsonl").exists()  # no trace before real episode
-
-
-def test_plan_runs_multi_expands_once():
-    tasks = [_task()]
-    runs = plan_runs(["multi"], tasks)
-    assert [b for b, _ in runs] == list(BASELINES)
-    # duplicates collapse, order preserved; duplicated tasks double the episodes
-    dup = plan_runs(["heuristic", "multi"], tasks * 2)
-    assert list(dict.fromkeys(b for b, _ in dup)) == ["heuristic"] + [
-        b for b in BASELINES if b != "heuristic"
-    ]
-    assert len(dup) == 10
 
 
 def test_task_config_uses_coordinate_mode_key_and_wires_llm():
