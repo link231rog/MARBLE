@@ -107,3 +107,38 @@ def test_plan_runs_multi_expands_once():
         b for b in BASELINES if b != "heuristic"
     ]
     assert len(dup) == 10
+
+
+def test_task_config_uses_coordinate_mode_key_and_wires_llm():
+    # regression: Config reads coordinate_mode; coordination_mode would crash
+    t = _task()
+    cfg = task_config(t, "heuristic", llm="gpt-4o-mini")
+    assert cfg["coordinate_mode"] == "graph"
+    assert "coordination_mode" not in cfg
+    assert cfg["llm"] == "gpt-4o-mini"
+
+
+def test_apply_split_deterministic():
+    from marble.experiments.run_benchmark import _apply_split
+
+    tasks = [_task()] * 3 + load_tasks("coding", limit=40)[1:4]
+    train = _apply_split(tasks, "train")
+    test = _apply_split(tasks, "test")
+    assert {t.task_id for t in train} | {t.task_id for t in test} == {
+        t.task_id for t in tasks
+    }
+    # stable: same split returns same membership
+    assert {t.task_id for t in _apply_split(tasks, "train")} == {
+        t.task_id for t in train
+    }
+    assert _apply_split(tasks, "all") == tasks
+
+
+def test_ablation_wired_into_task_config():
+    from marble.experiments.run_benchmark import apply_to_task_config, parse_ablation
+
+    t = _task()
+    cfg = task_config(t, "learned_controller", ablation="retrieval:none")
+    # parse_ablation accepted; retrieval ablation marked in memory block
+    assert cfg["memory"]["ablation"] == "retrieval:none"
+    assert cfg["memory"]["max_cards"] == 0  # retrieval:none zeroes visible cards

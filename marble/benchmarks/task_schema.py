@@ -19,3 +19,4 @@ class BenchmarkTask:
     metrics: dict = field(default_factory=dict)
     engine_planner: dict = field(default_factory=dict)
     output: dict = field(default_factory=dict)
+    llm: str = ""  # model string for workers (e.g. '', 'gpt-4o-mini')
