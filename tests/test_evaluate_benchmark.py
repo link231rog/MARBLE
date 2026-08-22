@@ -5,6 +5,7 @@ from marble.experiments.evaluate import (
     evaluate_memory_trace,
     evaluate_run_root,
     evaluate_task_dir,
+    main,
 )
 
 
@@ -76,3 +77,18 @@ def test_run_root_walk_and_aggregation(tmp_path):
     assert agg["no_memory"]["task_score"] == 0.5
     assert agg["heuristic"]["task_score_se"] > 0
     assert agg["no_memory"]["task_score_se"] == 0.0
+
+
+def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):
+    # layout produced by run_benchmark: root/run_id/baseline/benchmark/task_id/
+    for baseline in ("no_memory", "heuristic"):
+        tdir = tmp_path / "coding_multi" / baseline / "coding" / "1"
+        tdir.mkdir(parents=True)
+        (tdir / "summary.json").write_text(json.dumps(
+            {"method": baseline, "benchmark": "coding", "task_id": 1,
+             "seed": None, "status": "dry_run", "task_score": 0.0}))
+        (tdir / "memory_trace.jsonl").write_text("")
+    main(["--run-dir", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert sorted(out) == ["heuristic", "no_memory"]
+    assert out["heuristic"]["memory.decisions_total"] == 0.0

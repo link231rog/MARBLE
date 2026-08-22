@@ -187,15 +187,26 @@ def aggregate_by_method(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, float
     return report
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate governed-memory baselines.")
-    parser.add_argument("--run-dir", required=True, help="coding_rollout run dir OR run_root")
-    args = parser.parse_args()
+def main(argv: List[str] | None = None) -> None:
+    import argparse
     import glob as _glob
 
-    nested = _glob.glob(os.path.join(args.run_dir, "*", "*", "summary.json"))
+    parser = argparse.ArgumentParser(description="Evaluate governed-memory baselines.")
+    parser.add_argument("--run-dir", required=True, help="coding_rollout run dir OR run_root")
+    args = parser.parse_args(argv)
+
+    # any summary.json below the root that is not the legacy root-level one
+    legacy = os.path.abspath(os.path.join(args.run_dir, "summary.json"))
+    nested = [
+        p for p in _glob.glob(os.path.join(args.run_dir, "**", "summary.json"), recursive=True)
+        if os.path.abspath(p) != legacy
+    ]
     if nested:
         rows = evaluate_run_root(args.run_dir)
         print(json.dumps(aggregate_by_method(rows), indent=2))
     else:
         print(format_report(evaluate_run(args.run_dir)))
+
+
+if __name__ == "__main__":
+    main()
