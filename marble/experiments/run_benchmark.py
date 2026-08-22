@@ -6,6 +6,7 @@ offline; they happen only inside _run_real_episode.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -20,6 +21,13 @@ from marble.controllers import (
     LocalPolicyController,
     PrivateOnlyController,
 )
+from marble.experiments.ablations import (
+    apply_to_task_config,
+    controller_kwargs,
+    parse_ablation,
+    reward_override,
+    wrap_controller,
+)
 from marble.experiments.engine_bridge import MemoryStep, build_governed_engine_cls
 from marble.memory import GovernedMemory, MemoryBank, TraceLogger
 
@@ -32,38 +40,52 @@ _WORKER_KEY_VARS = ("OPENAI_API_KEY", "NVAPI_KEY", "MARBLE_API_KEY")
 def make_controller(
     baseline: str,
     controller_checkpoint: Optional[str] = None,
+    ablation: Optional[str] = None,
 ) -> Any:
+    controller: Any = None
     if baseline == "no_memory":
-        return AbsentController()
-    if baseline == "global_always":
-        return GlobalAlwaysController()
-    if baseline == "private_only":
-        return PrivateOnlyController()
-    if baseline == "heuristic":
-        return HeuristicController()
-    if baseline == "learned_controller":
+        controller = AbsentController()
+    elif baseline == "global_always":
+        controller = GlobalAlwaysController()
+    elif baseline == "private_only":
+        controller = PrivateOnlyController()
+    elif baseline == "heuristic":
+        controller = HeuristicController()
+    elif baseline == "learned_controller":
         if controller_checkpoint:
-            return LocalPolicyController.load(controller_checkpoint)
-        from marble.experiments.coding_rollout import NvidiaLLM
+            controller = LocalPolicyController.load(controller_checkpoint)
+        else:
+            from marble.experiments.coding_rollout import NvidiaLLM
 
-        llm = NvidiaLLM()  # raises RuntimeError when NVAPI_KEY missing
-        return JsonController(
-            lambda p: llm.act(
-                "You are a strict memory-governance controller. Output ONLY the JSON decision.",
-                p,
+            llm = NvidiaLLM()  # raises RuntimeError when NVAPI_KEY missing
+            kwargs: Dict[str, Any] = {}
+            if ablation:
+                factor, option = parse_ablation(ablation)
+                kwargs.update(controller_kwargs(factor, option))
+            controller = JsonController(
+                lambda p: llm.act(
+                    "You are a strict memory-governance controller. Output ONLY the JSON decision.",
+                    p,
+                ),
+                **kwargs,
             )
-        )
-    raise ValueError(f"unknown baseline {baseline!r}; choose from {BASELINES}")
+    else:
+        raise ValueError(f"unknown baseline {baseline!r}; choose from {BASELINES}")
+    if ablation:
+        factor, option = parse_ablation(ablation)
+        controller = wrap_controller(controller, factor, option)
+    return controller
 
 
 def make_governed(
     baseline: str,
     trace_path: str | Path,
     controller_checkpoint: Optional[str] = None,
+    ablation: Optional[str] = None,
 ) -> GovernedMemory:
     return GovernedMemory(
         MemoryBank(),
-        make_controller(baseline, controller_checkpoint),
+        make_controller(baseline, controller_checkpoint, ablation),
         trace=TraceLogger(str(trace_path)),
     )
 
@@ -75,6 +97,8 @@ def task_config(
     max_cards: int = 6,
     max_reads_per_step: int = 2,
     retriever: str = "key_first",
+    llm: str = "",
+    ablation: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Original record + governed memory block injected (source untouched)."""
     cfg: Dict[str, Any] = {
@@ -86,7 +110,9 @@ def task_config(
         "metrics": dict(task.metrics),
         "engine_planner": dict(task.engine_planner),
         "output": dict(task.output),
-        "coordination_mode": "graph",
+        # ponytail: Config reads coordinate_mode (config.py), not coordination_mode
+        "coordinate_mode": "graph",
+        "llm": llm or task.llm,  # agents fall back to config.llm; must be non-empty
     }
     if baseline != "no_memory":
         cfg["memory"] = {
@@ -97,6 +123,11 @@ def task_config(
             "max_cards": max_cards,
             "max_reads_per_step": max_reads_per_step,
         }
+    if ablation:
+        from marble.experiments.ablations import apply_to_task_config, parse_ablation
+
+        factor, option = parse_ablation(ablation)
+        cfg = apply_to_task_config(cfg, factor, option)
     return cfg
 
 
@@ -137,6 +168,8 @@ def run_task(
     max_cards: int = 6,
     max_reads_per_step: int = 2,
     retriever: str = "key_first",
+    llm: str = "",
+    ablation: Optional[str] = None,
     controller_checkpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
     if seed is not None:
@@ -145,7 +178,9 @@ def run_task(
     tdir.mkdir(parents=True, exist_ok=True)
     errors: List[str] = []
 
-    cfg = task_config(task, baseline, max_cards, max_reads_per_step, retriever)
+    cfg = task_config(
+        task, baseline, max_cards, max_reads_per_step, retriever, llm, ablation
+    )
     if max_iterations is not None:
         cfg["environment"]["max_iterations"] = max_iterations
     _write_config(tdir / "config.yaml", cfg)
@@ -169,6 +204,8 @@ def run_task(
             max_cards=max_cards,
             max_reads_per_step=max_reads_per_step,
             controller_checkpoint=controller_checkpoint,
+            llm=llm,
+            ablation=ablation,
         )
         summary.update(metrics)
     except Exception as exc:  # noqa: BLE001 — one bad task must not kill the sweep
@@ -200,37 +237,75 @@ def _run_real_episode(
     max_cards: int,
     max_reads_per_step: int,
     controller_checkpoint: Optional[str],
+    llm: str = "",
+    ablation: Optional[str] = None,
 ) -> Dict[str, Any]:
     _require_worker_key()
-    # lazy: litellm chain lives behind these imports
-    from marble.configs.config import Config
+    import os
 
-    config_path = tdir / "config.yaml"
-    config = Config.load(str(config_path))
-    mem = make_governed(baseline, tdir / "memory_trace.jsonl", controller_checkpoint)
-    harness = MemoryStep(mem, max_cards=max_cards, max_reads_per_step=max_reads_per_step)
+    from marble.configs.config import Config
+    from marble.memory.rewards import proposal_rewards
+
+    mem = make_governed(
+        baseline, tdir / "memory_trace.jsonl", controller_checkpoint, ablation
+    )
+    # ponytail: selector "top" makes agents read the top-ranked cards without an
+    # extra API call, so memory actually influences the task
+    harness = MemoryStep(
+        mem, max_cards=max_cards, max_reads_per_step=max_reads_per_step,
+        selector="top",
+    )
     harness.task_id = str(task.task_id)
 
     EngineCls = build_governed_engine_cls()
-    engine = EngineCls(config)
-    engine.memory_harness = harness
-    engine.start()
+    # harness must exist BEFORE Engine.__init__ (agents read it during _initialize_agents)
+    EngineCls.memory_harness = harness
+
+    config = Config.load(str(tdir / "config.yaml"))
+    # Evaluator opens a RELATIVE 'evaluator/evaluator_prompts.json'; MARBLE expects
+    # cwd = marble/ — chdir for the engine run, restore after.
+    marble_dir = Path(__file__).resolve().parents[1]
+    prev_cwd = os.getcwd()
+    os.chdir(marble_dir)
+    try:
+        engine = EngineCls(config)
+        engine.start()
+    finally:
+        os.chdir(prev_cwd)
 
     metrics: Dict[str, Any] = {}
     evaluator_metrics = getattr(getattr(engine, "evaluator", None), "metrics", None)
     if isinstance(evaluator_metrics, dict):
-        metrics["task_score"] = evaluator_metrics.get("task_score", 0.0)
+        # Evaluator has no 'task_score'; derive from task_completion (0/1 list)
+        completions = evaluator_metrics.get("task_completion", [])
+        task_score = sum(completions) / len(completions) if completions else 0.0
+        metrics["task_score"] = task_score
         metrics["engine_metrics"] = {
             k: v for k, v in evaluator_metrics.items() if isinstance(v, (int, float, str))
         }
 
-    # per-proposal credits recomputable from trace + score (spec §17)
     events = _read_jsonl(tdir / "memory_trace.jsonl")
-    from marble.memory.rewards import proposal_rewards
-
-    credits = proposal_rewards(events, r_episode=float(metrics.get("task_score", 0.0)))
+    reward_kw: Dict[str, float] = {}
+    if ablation:
+        factor, option = parse_ablation(ablation)
+        reward_kw = reward_override(factor, option)
+    credits = proposal_rewards(events, r_episode=float(metrics.get("task_score", 0.0)), **reward_kw)
     (tdir / "reward.json").write_text(json.dumps(credits, indent=2), encoding="utf-8")
     return metrics
+
+
+def _apply_split(tasks: List[BenchmarkTask], split: str) -> List[BenchmarkTask]:
+    """Deterministic train/test split by task_id (spec §15 fairness)."""
+    if split in ("all", ""):
+        return tasks
+    buckets: Dict[str, List[BenchmarkTask]] = {"train": [], "test": []}
+    for t in tasks:
+        # stable 80/20 split independent of load order
+        h = int(hashlib.sha256(str(t.task_id).encode()).hexdigest(), 16) % 10
+        buckets["train" if h < 8 else "test"].append(t)
+    if split not in buckets:
+        raise ValueError(f"unknown split {split!r}; choose all|train|test")
+    return buckets[split]
 
 
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -246,7 +321,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--benchmark", required=True, choices=BENCHMARKS)
     ap.add_argument("--baseline", default="heuristic",
                     help=f"one of {BASELINES} or 'multi'")
-    ap.add_argument("--split", default="all")
+    ap.add_argument("--split", default="all", help="all|train|test (deterministic by task_id)")
     ap.add_argument("--task-ids", default="", help="comma-separated task ids")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--start", type=int, default=0)
@@ -256,12 +331,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--max-reads-per-step", type=int, default=2)
     ap.add_argument("--controller-checkpoint", default=None)
     ap.add_argument("--worker-model", default=None, help="litellm model string for workers")
+    ap.add_argument("--ablation", default=None, help="factor:option, e.g. retrieval:none")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", default="runs")
     args = ap.parse_args(argv)
 
     task_ids = [int(x) for x in args.task_ids.split(",") if x.strip()] or None
     tasks = load_tasks(args.benchmark, limit=args.limit, start=args.start, task_ids=task_ids)
+    tasks = _apply_split(tasks, args.split)
     if args.worker_model:
         import os
 
@@ -272,6 +349,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     runs = plan_runs(baselines, tasks)
 
     run_id = f"{args.benchmark}_{args.baseline}"
+    if args.ablation:
+        run_id += f"_ablation-{args.ablation.replace(':', '_')}"
     if args.seed is not None:
         run_id += f"_seed{args.seed}"
     out_root = Path(args.out) / run_id
@@ -284,6 +363,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             max_iterations=args.max_iterations,
             max_reads_per_step=args.max_reads_per_step,
             retriever=args.retrieval,
+            llm=args.worker_model or "",
+            ablation=args.ablation,
             controller_checkpoint=args.controller_checkpoint,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")

@@ -22,8 +22,11 @@ class MemoryStep:
         selector_fn: Optional[Callable[[str], str]] = None,
         max_cards: int = 6,
         max_reads_per_step: int = 2,
+        selector: str = "callable",
     ):
         self.memory = memory
+        # selector: "callable" (use selector_fn) or "top" (rank-order, no API)
+        self.selector = selector
         self.selector_fn = selector_fn
         self.max_cards = max_cards
         self.max_reads_per_step = max_reads_per_step
@@ -64,6 +67,9 @@ class MemoryStep:
         return notes
 
     def _select_ids(self, agent_id: str, cards) -> List[str]:
+        if self.selector == "top":
+            # rank-order default: read the top-ranked cards without an extra API call
+            return [c.memory_id for c in cards[: self.max_reads_per_step]]
         if self.selector_fn is None:
             return []
         listing = "\n".join(f"- {c.memory_id} | {c.title}" for c in cards)

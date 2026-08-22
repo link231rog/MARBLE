@@ -184,3 +184,60 @@ def test_governed_engine_cls_overrides_agents_only():
     )
     assert [a.agent_id for a in engine.agents] == ["a1", "a2"]
     assert all(a.governed is None for a in engine.agents)  # runner attaches harness later
+
+
+def test_governed_engine_attaches_harness_before_init(tmp_path):
+    # regression for FATAL: agents read harness during __init__, so it must be
+    # set on the class BEFORE Engine(config) is constructed.
+    mem, _ = _memory(tmp_path)
+    harness = MemoryStep(mem, max_cards=6, max_reads_per_step=2, selector="top")
+
+    class DummyEnv:
+        pass
+
+    class DummyEngine:
+        def __init__(self, config):
+            self.config = config
+            self.environment = DummyEnv()
+            self.agents = self._initialize_agents(config.agents)
+
+        def _initialize_agents(self, agent_configs):
+            agents = []
+            for ac in agent_configs:
+                a = FakeAgent(ac, self.environment, self.config.llm)
+                a.governed = self.memory_harness  # mirrors GovernedEngine override
+                agents.append(a)
+            return agents
+
+    class FakeAgent:
+        def __init__(self, config, env, model):
+            self.agent_id = config["agent_id"]
+            self.governed = None
+
+    GovernedEngine = build_governed_engine_cls(DummyEngine, agent_cls=FakeAgent)
+    GovernedEngine.memory_harness = harness  # set BEFORE constructing engine
+    from types import SimpleNamespace
+
+    engine = GovernedEngine(
+        SimpleNamespace(llm="fake", agents=[{"agent_id": "a1"}])
+    )
+    assert engine.agents[0].governed is harness  # attached, not None
+
+
+def test_selector_top_reads_top_ranked_cards(tmp_path):
+    mem, trace_path = _memory(tmp_path)
+    item = _store_global(mem, title="first", value="alpha")
+    item2 = _store_global(mem, title="second", value="beta")
+    harness = MemoryStep(
+        mem, max_cards=6, max_reads_per_step=1, selector="top"
+    )
+    harness.task_id = "t"
+    text = harness.before_act("reader", "t")
+    assert "alpha" in text and "beta" not in text  # top-1 read, capped
+    assert harness.reads_this_episode == 1
+    assert harness.reads_this_episode == 1
+    events = [
+        e for e in _events(trace_path)
+        if e.get("event") == "memory_read"
+    ]
+    assert events and events[0]["memory_id"] == item.memory_id

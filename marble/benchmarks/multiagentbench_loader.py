@@ -51,6 +51,7 @@ def load_tasks(
                     metrics=dict(r.get("metrics", {})),
                     engine_planner=dict(r.get("engine_planner", {})),
                     output=dict(r.get("output", {})),
+                    llm=str(r.get("llm", "")),
                 )
             )
     if task_ids is not None:
