@@ -71,6 +71,7 @@ def train_rl(
     init_checkpoint: str | None = None,
     epochs: int = 5,
     lr: float = 0.05,
+    r_episode: float = 1.0,
 ) -> Dict[str, Any]:
     controller = (
         LocalPolicyController.load(init_checkpoint)
@@ -90,7 +91,7 @@ def train_rl(
             continue
         episodes += 1
         # ponytail: running-baseline omitted — single-method offline replay only
-        credits = proposal_rewards(events, r_episode=1.0)
+        credits = proposal_rewards(events, r_episode=r_episode)
         for _ in range(epochs):
             steps += trainer.update_trace(events, credits)
     controller.save(out_path)

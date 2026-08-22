@@ -48,6 +48,16 @@ def test_task_config_injects_governed_block_only_when_needed():
     assert gov["agents"] == [dict(a) for a in t.agents]
 
 
+def test_task_config_overrides_empty_env_type():
+    # JSONL ships environment.type="" which would make Engine raise
+    # "Unsupported environment type"; task_config must fill the benchmark default.
+    t = _task()
+    assert not str(t.environment.get("type", "")).strip()
+    cfg = task_config(t, "heuristic")
+    assert cfg["environment"]["type"] == "Coding"
+    assert cfg["environment"]["max_iterations"] == 10
+
+
 def test_dry_run_writes_layout_without_engine(tmp_path):
     t = _task()
     summary = run_task(t, "heuristic", tmp_path, dry_run=True, seed=7)

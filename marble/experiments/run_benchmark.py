@@ -119,7 +119,10 @@ def task_config(
     _ENV_DEFAULTS = {"coding": "Coding", "research": "Research", "database": "DB",
                      "bargaining": "Web", "minecraft": "Minecraft"}
     env = cfg["environment"]
-    env.setdefault("type", _ENV_DEFAULTS.get(task.benchmark, "Base"))
+    # ponytail: JSONL ships type="" (falsy) — setdefault won't override it, so
+    # check falsy explicitly or Engine raises "Unsupported environment type"
+    if not str(env.get("type", "")).strip():
+        env["type"] = _ENV_DEFAULTS.get(task.benchmark, "Base")
     if not str(env.get("max_iterations", "")).strip():
         env["max_iterations"] = 10
     if baseline != "no_memory":
@@ -296,11 +299,19 @@ def _run_real_episode(
         os.chdir(prev_cwd)
 
     metrics: Dict[str, Any] = {}
-    evaluator_metrics = getattr(getattr(engine, "evaluator", None), "metrics", None)
+    evaluator = getattr(engine, "evaluator", None)
+    evaluator_metrics = getattr(evaluator, "metrics", None)
     if isinstance(evaluator_metrics, dict):
-        # Evaluator has no 'task_score'; derive from task_completion (0/1 list)
+        result_text = ""
+        out_path = Path(cfg["output"].get("file_path", ""))
+        if out_path.exists():
+            result_text = out_path.read_text(encoding="utf-8", errors="ignore")
+        # Evaluator has no 'task_score'; derive from benchmark-specific eval with
+        # task_completion mean as a lower bound
+        task_score = _benchmark_score(task.benchmark, evaluator, task.task, result_text)
         completions = evaluator_metrics.get("task_completion", [])
-        task_score = sum(completions) / len(completions) if completions else 0.0
+        if completions:
+            task_score = max(task_score, sum(completions) / len(completions))
         metrics["task_score"] = task_score
         metrics["engine_metrics"] = {
             k: v for k, v in evaluator_metrics.items() if isinstance(v, (int, float, str))
@@ -335,6 +346,48 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
         return []
     with open(path, encoding="utf-8") as fh:
         return [json.loads(line) for line in fh if line.strip()]
+
+
+# ------------------------------------------------------------------- scoring
+def _benchmark_score(benchmark: str, evaluator, task_content: str,
+                     result_text: str) -> float:
+    """Normalized 0..1 task score from MARBLE's per-benchmark evaluator.
+
+    ponytail: real scoring needs MARBLE's eval LLM (gpt-3.5-turbo default).
+    We call the matching evaluate_* when available and normalize its output;
+    when the eval LLM is absent we fall back to the task_completion mean.
+    is_task_completed() compares to empty ground_truth so it is usually 0.
+    """
+    m = getattr(evaluator, "metrics", {}) or {}
+    completions = m.get("task_completion", [])
+    base = sum(completions) / len(completions) if completions else 0.0
+    if not result_text:
+        return base
+    try:
+        if benchmark == "research":
+            evaluator.evaluate_task_research(task_content, result_text)
+            te = m.get("task_evaluation") or {}
+            vals = [v for v in te.values() if isinstance(v, (int, float))]
+            return sum(vals) / len(vals) / 5.0 if vals else base
+        elif benchmark == "minecraft":
+            evaluator.evaluate_task_world(task_content, result_text)
+            te = m.get("task_evaluation") or {}
+            vals = []
+            for side in ("buyer", "seller"):
+                vals += [v for v in (te.get(side) or {}).values()
+                         if isinstance(v, (int, float))]
+            return sum(vals) / len(vals) / 5.0 if vals else base
+        elif benchmark == "database":
+            evaluator.evaluate_task_db(task_content, result_text, [], 0, [])
+            return 1.0 if (m.get("task_evaluation") or {}).get("root_cause") else base
+        elif benchmark == "coding":
+            evaluator.evaluate_code_quality(task_content, result_text)
+            cq = m.get("code_quality") or {}
+            vals = [v for v in cq.values() if isinstance(v, (int, float))]
+            return sum(vals) / len(vals) / 5.0 if vals else base
+    except Exception as exc:  # noqa: BLE001 — eval LLM may be absent offline
+        print(f"[warn] benchmark scoring failed ({benchmark}): {exc}")
+    return base
 
 
 # ------------------------------------------------------------------------ CLI

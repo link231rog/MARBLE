@@ -110,6 +110,24 @@ if __name__ == "__main__":
     ap.add_argument("--factor", required=True, choices=FACTORS)
     ap.add_argument("--option", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--run", action="store_true",
+                    help="also run the benchmark via run_benchmark (reuses its pipeline)")
+    ap.add_argument("--benchmark", default="coding", help="benchmark to run when --run")
+    ap.add_argument("--baseline", default="learned_controller", help="baseline when --run")
+    ap.add_argument("--out-dir", default="runs/ablations", help="run dir when --run")
+    ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     res = run_ablation(args.base_config, args.factor, args.option, args.out)
     print(json.dumps(res))
+    if args.run:
+        from marble.experiments import run_benchmark
+
+        argv = [
+            "--benchmark", args.benchmark,
+            "--baseline", args.baseline,
+            "--ablation", f"{args.factor}:{args.option}",
+            "--out", args.out_dir,
+        ]
+        if args.dry_run:
+            argv.append("--dry-run")
+        run_benchmark.main(argv)
