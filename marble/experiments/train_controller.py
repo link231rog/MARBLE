@@ -76,6 +76,6 @@ if __name__ == "__main__":
         from marble.controllers.rl_controller import train_rl
 
         train_rl(args.traces, args.out, init_checkpoint=args.init,
-                 epochs=args.epochs, lr=0.05)
+                 epochs=args.epochs, lr=0.05, r_episode=args.r_episode)
     else:
         train(args.traces, args.out, epochs=args.epochs)
