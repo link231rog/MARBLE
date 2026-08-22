@@ -87,9 +87,6 @@ def run_episode(
     os.makedirs(workspace_dir, exist_ok=True)
     path = os.path.join(workspace_dir, "solution.py")
 
-    def memories_block(cards: List[Any]) -> str:
-        return format_cards(cards)
-
     coder_adapter = MemoryAwareAgentAdapter(llm, memory, source="worker") if memory else None
     reviewer_adapter = MemoryAwareAgentAdapter(llm, memory, source="worker") if memory else None
 
@@ -102,7 +99,7 @@ def run_episode(
         cards = coder_adapter.before_step(task_id, "coder", query=task)
         visible_key_events += bool(cards)
         mem_section = (
-            "Notes from teammates:\n" + memories_block(cards)
+            "Notes from teammates:\n" + format_cards(cards)
             if cards else ""
         )
     else:

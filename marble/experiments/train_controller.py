@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, List
 
 from marble.controllers import LocalPolicyController, features
+from marble.controllers.local_policy import VISIBILITIES
 from marble.memory.schema import MemoryProposal
 
 
@@ -37,7 +38,7 @@ def accuracy(policy: LocalPolicyController, samples: List[Dict[str, Any]]) -> fl
     if not samples:
         return 0.0
     hits = sum(
-        max(("absent", "private", "global"),
+        max(VISIBILITIES,
             key=lambda v: policy.scores(s["feat"])[v]) == s["label"]
         for s in samples
     )

@@ -71,8 +71,7 @@ def format_report(report: Dict[str, Any]) -> str:
     for baseline, m in report.items():
         row = [baseline.ljust(16)]
         for c in cols:
-            val = m[c] if c != "decisions" else sum(m["decisions"].values())
-            row.append(str(val).rjust(18))
+            row.append(str(m[c]).rjust(18))
         lines.append("".join(row))
     return "\n".join(lines)
 

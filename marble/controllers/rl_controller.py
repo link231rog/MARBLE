@@ -78,6 +78,8 @@ def train_rl(
         else LocalPolicyController()
     )
     trainer = RLTrainer(controller, lr=lr)
+    from marble.memory.rewards import proposal_rewards
+
     episodes = 0
     steps = 0
     for path in trace_paths:
@@ -88,8 +90,6 @@ def train_rl(
             continue
         episodes += 1
         # ponytail: running-baseline omitted — single-method offline replay only
-        from marble.memory.rewards import proposal_rewards
-
         credits = proposal_rewards(events, r_episode=1.0)
         for _ in range(epochs):
             steps += trainer.update_trace(events, credits)
