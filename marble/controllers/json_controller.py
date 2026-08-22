@@ -16,24 +16,33 @@ VALID_VISIBILITIES = ("absent", "private", "global")
 class JsonController:
     """decide() via llm_fn(prompt) -> str; strict-JSON contract enforced here."""
 
-    def __init__(self, llm_fn: Callable[[str], str], max_value_chars: int = 512):
+    def __init__(
+        self,
+        llm_fn: Callable[[str], str],
+        max_value_chars: int = 512,
+        drop_fields: tuple = (),
+    ):
         self.llm_fn = llm_fn
         self.max_value_chars = max_value_chars
+        self.drop_fields = frozenset(drop_fields)
         self.rejections: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------ prompt
     def build_prompt(self, proposal: MemoryProposal, current_state: Sequence[MemoryItem]) -> str:
         same_title = _find_same_title(proposal, current_state)
+        fields = {
+            "title": proposal.title,
+            "value": proposal.raw_value[: self.max_value_chars],
+            "source": proposal.source,
+            "agent_id": proposal.agent_id,
+            "task_id": proposal.task_id,
+            "step_index": proposal.step_index,
+        }
         lines = [
             "Decide whether this agent output should become shared team memory.",
-            f"title: {proposal.title}",
-            f"value: {proposal.raw_value[: self.max_value_chars]}",
-            f"source: {proposal.source}",
-            f"agent_id: {proposal.agent_id}",
-            f"task_id: {proposal.task_id}",
-            f"step_index: {proposal.step_index}",
-            "active memories:",
         ]
+        lines += [f"{name}: {val}" for name, val in fields.items() if name not in self.drop_fields]
+        lines.append("active memories:")
         lines += [
             f"- {it.memory_id} | {it.title} | {it.visibility} | owner={it.owner_id}"
             for it in current_state

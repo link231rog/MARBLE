@@ -44,11 +44,16 @@ def proposal_rewards(
     events: List[Dict[str, Any]],
     r_episode: float,
     running_baseline: float = 0.0,
+    reuse_weight_non_owner: float | None = None,
+    reuse_weight_owner: float | None = None,
 ) -> Dict[str, float]:
     """G_t per stored proposal from one episode's trace events.
 
     G_t = -storage_cost + I[read] * reuse_weight * (r_episode - running_baseline)
+    Weight overrides exist for the reward ablation (spec §14).
     """
+    w_non_owner = REUSE_WEIGHT_NON_OWNER if reuse_weight_non_owner is None else reuse_weight_non_owner
+    w_owner = REUSE_WEIGHT_OWNER if reuse_weight_owner is None else reuse_weight_owner
     stored: Dict[str, Dict[str, Any]] = {}
     for ev in events:
         if ev.get("event") != "memory_decision":
@@ -75,6 +80,6 @@ def proposal_rewards(
             credits[mid] = -storage_cost
             continue
         non_owner_reads = [r for r in readers[mid] if r != info["owner"]]
-        weight = REUSE_WEIGHT_NON_OWNER if non_owner_reads else REUSE_WEIGHT_OWNER
+        weight = w_non_owner if non_owner_reads else w_owner
         credits[mid] = -storage_cost + weight * advantage
     return credits
