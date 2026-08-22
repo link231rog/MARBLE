@@ -59,7 +59,7 @@ class MemoryStep:
                 value = self.memory.read(mid, reader_id=agent_id, task_id=self.task_id)
             except (KeyError, PermissionError):
                 continue
-            notes.append(f"- [{mid}] {value}")
+            notes.append(f"- [{mid}] {value.raw_value}")
             self.reads_this_episode += 1
         return notes
 

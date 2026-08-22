@@ -131,6 +131,6 @@ def _resolve_supersedes(
     for it in current_state:
         if not (it.active and it.task_id == proposal.task_id):
             continue
-        if it.memory_id == supersedes or it.title.strip().casefold() == wanted:
+        if it.memory_id == supersedes or str(supersedes) == it.memory_id or it.title.strip().casefold() == wanted:
             return it.memory_id
     return None
