@@ -11,6 +11,7 @@ REUSE_WEIGHT_OWNER = 1.00
 W_COORDINATION = 0.25
 W_READ_COST = 0.10
 W_GLOBAL_STORAGE = 0.05
+W_COMM_COST = 0.10
 
 
 def token_count(text: str) -> int:
@@ -24,6 +25,7 @@ class EpisodeStats:
     coordination_score: float = 0.0
     read_tokens: int = 0
     active_global_tokens: int = 0
+    communication_tokens: int = 0
     token_budget: int = 4096
 
 
@@ -34,6 +36,7 @@ def episode_reward(stats: EpisodeStats) -> float:
         + W_COORDINATION * stats.coordination_score
         - W_READ_COST * stats.read_tokens / budget
         - W_GLOBAL_STORAGE * stats.active_global_tokens / budget
+        - W_COMM_COST * stats.communication_tokens / budget
     )
 
 

@@ -21,6 +21,13 @@ def test_episode_reward_formula():
     assert abs(r - (1.0 + 0.25 * 0.5 - 0.10 * 0.5 - 0.05 * 1.0)) < 1e-9
 
 
+def test_episode_reward_communication_cost():
+    stats = EpisodeStats(task_score=1.0, communication_tokens=256, token_budget=1024)
+    assert abs(episode_reward(stats) - (1.0 - 0.10 * 0.25)) < 1e-9
+    # default zero keeps old formula
+    assert episode_reward(EpisodeStats(task_score=1.0)) == 1.0
+
+
 def _proposal(pid, agent, value):
     return MemoryProposal(proposal_id=pid, task_id="t", agent_id=agent,
                           source="worker", title=value[:8], raw_value=value,
