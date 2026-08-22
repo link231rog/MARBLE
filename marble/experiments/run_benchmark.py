@@ -139,7 +139,8 @@ def run_task(
 ) -> Dict[str, Any]:
     if seed is not None:
         random.seed(seed)
-    tdir = Path(out_root) / task.benchmark / str(task.task_id)
+    # method segment first: --baseline multi must never collide two methods in one dir
+    tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
     tdir.mkdir(parents=True, exist_ok=True)
     errors: List[str] = []
 
@@ -269,7 +270,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     baselines = ["multi"] if args.baseline == "multi" else [args.baseline]
     runs = plan_runs(baselines, tasks)
 
-    run_id = f"{args.benchmark}_{args.baseline.replace(',', '_')}"
+    run_id = f"{args.benchmark}_{args.baseline}"
     if args.seed is not None:
         run_id += f"_seed{args.seed}"
     out_root = Path(args.out) / run_id

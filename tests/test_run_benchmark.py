@@ -65,7 +65,7 @@ def test_task_config_injects_governed_block_only_when_needed():
 def test_dry_run_writes_layout_without_engine(tmp_path):
     t = _task()
     summary = run_task(t, "heuristic", tmp_path, dry_run=True, seed=7)
-    tdir = tmp_path / "coding" / str(t.task_id)
+    tdir = tmp_path / "heuristic" / "coding" / str(t.task_id)
     assert (tdir / "config.yaml").exists()
     on_disk = json.loads((tdir / "summary.json").read_text())
     assert on_disk["status"] == "dry_run"
@@ -73,12 +73,24 @@ def test_dry_run_writes_layout_without_engine(tmp_path):
     assert summary["status"] == "dry_run"
 
 
+def test_multi_run_keeps_every_method_on_disk(tmp_path):
+    tasks = [_task()]
+    for baseline, task in plan_runs(["multi"], tasks):
+        run_task(task, baseline, tmp_path, dry_run=True)
+    found = sorted(
+        (json.loads(p.read_text())["method"], p.parent)
+        for p in tmp_path.rglob("summary.json")
+    )
+    assert [m for m, _ in found] == sorted(BASELINES)  # no overwrites
+    assert len({d for _, d in found}) == len(BASELINES)
+
+
 def test_real_run_without_any_key_records_error(tmp_path, monkeypatch):
     for var in ("OPENAI_API_KEY", "NVAPI_KEY", "MARBLE_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     t = _task()
     summary = run_task(t, "no_memory", tmp_path)
-    tdir = tmp_path / "coding" / str(t.task_id)
+    tdir = tmp_path / "no_memory" / "coding" / str(t.task_id)
     assert summary["status"] == "error"
     err = (tdir / "errors.log").read_text()
     assert "worker API key" in err
