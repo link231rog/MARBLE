@@ -5,6 +5,9 @@ apply them before building controllers/configs.
 """
 from __future__ import annotations
 
+import argparse
+import json
+from pathlib import Path
 from typing import Any, Dict, Sequence
 
 from marble.memory.schema import MemoryProposal, MemoryTargetState
@@ -71,3 +74,42 @@ def reward_override(factor: str, option: str) -> Dict[str, float]:
     if factor == "reward" and option == "no_reuse":
         return {"reuse_weight_non_owner": 0.0, "reuse_weight_owner": 0.0}
     return {}
+
+
+# ----------------------------------------------------------------------- CLI
+def _load_config(path: str) -> Dict[str, Any]:
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        import yaml
+
+        return yaml.safe_load(text)
+    except ImportError:
+        return json.loads(text)
+
+
+def run_ablation(base_config: str, factor: str, option: str, out: str) -> Dict[str, Any]:
+    cfg = _load_config(base_config)
+    cfg = apply_to_task_config(cfg, factor, option)
+    text = _dump_config(cfg)
+    Path(out).write_text(text, encoding="utf-8")
+    return {"out": out, "ablation": f"{factor}:{option}"}
+
+
+def _dump_config(cfg: Dict[str, Any]) -> str:
+    try:
+        import yaml
+
+        return yaml.safe_dump(cfg, allow_unicode=True)
+    except ImportError:
+        return json.dumps(cfg, ensure_ascii=False, indent=2)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Apply a one-factor ablation to a task config")
+    ap.add_argument("--base-config", required=True, help="path to a task config yaml/json")
+    ap.add_argument("--factor", required=True, choices=FACTORS)
+    ap.add_argument("--option", required=True)
+    ap.add_argument("--out", required=True)
+    args = ap.parse_args()
+    res = run_ablation(args.base_config, args.factor, args.option, args.out)
+    print(json.dumps(res))

@@ -62,9 +62,20 @@ def train(trace_paths: List[str], out_path: str, epochs: int = 20,
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SFT the local policy controller.")
+    parser = argparse.ArgumentParser(description="Train the local policy controller (SFT or RL).")
+    parser.add_argument("--mode", choices=("sft", "rl"), default="sft",
+                        help="sft: perceptron warm-up; rl: REINFORCE replay over traces")
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--out", default="runs/local_policy.json")
     parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--init", default=None, help="SFT checkpoint to start RL from")
+    parser.add_argument("--r-episode", type=float, default=1.0,
+                        help="episode reward used for RL credit (offline replay)")
     args = parser.parse_args()
-    train(args.traces, args.out, epochs=args.epochs)
+    if args.mode == "rl":
+        from marble.controllers.rl_controller import train_rl
+
+        train_rl(args.traces, args.out, init_checkpoint=args.init,
+                 epochs=args.epochs, lr=0.05)
+    else:
+        train(args.traces, args.out, epochs=args.epochs)

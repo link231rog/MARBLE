@@ -114,6 +114,14 @@ def task_config(
         "coordinate_mode": "graph",
         "llm": llm or task.llm,  # agents fall back to config.llm; must be non-empty
     }
+    # ponytail: original JSONL leaves env type/max_iterations empty; fill so
+    # Engine.__init__ does not raise on an unsupported empty type
+    _ENV_DEFAULTS = {"coding": "Coding", "research": "Research", "database": "DB",
+                     "bargaining": "Web", "minecraft": "Minecraft"}
+    env = cfg["environment"]
+    env.setdefault("type", _ENV_DEFAULTS.get(task.benchmark, "Base"))
+    if not str(env.get("max_iterations", "")).strip():
+        env["max_iterations"] = 10
     if baseline != "no_memory":
         cfg["memory"] = {
             **cfg["memory"],
@@ -183,6 +191,9 @@ def run_task(
     )
     if max_iterations is not None:
         cfg["environment"]["max_iterations"] = max_iterations
+    # ponytail: Engine opens output.file_path; leave empty -> open("") IOError
+    if not str(cfg["output"].get("file_path", "")).strip():
+        cfg["output"]["file_path"] = str(tdir / "output.json")
     _write_config(tdir / "config.yaml", cfg)
 
     summary: Dict[str, Any] = {
@@ -206,6 +217,7 @@ def run_task(
             controller_checkpoint=controller_checkpoint,
             llm=llm,
             ablation=ablation,
+            retriever=retriever,
         )
         summary.update(metrics)
     except Exception as exc:  # noqa: BLE001 — one bad task must not kill the sweep
@@ -239,6 +251,7 @@ def _run_real_episode(
     controller_checkpoint: Optional[str],
     llm: str = "",
     ablation: Optional[str] = None,
+    retriever: str = "key_first",
 ) -> Dict[str, Any]:
     _require_worker_key()
     import os
@@ -251,8 +264,11 @@ def _run_real_episode(
     )
     # ponytail: selector "top" makes agents read the top-ranked cards without an
     # extra API call, so memory actually influences the task
+    if retriever not in ("key_first", "none"):
+        print(f"[warn] retrieval {retriever!r} not implemented; using key_first")
+    eff_max_cards = 0 if retriever == "none" else max_cards
     harness = MemoryStep(
-        mem, max_cards=max_cards, max_reads_per_step=max_reads_per_step,
+        mem, max_cards=eff_max_cards, max_reads_per_step=max_reads_per_step,
         selector="top",
     )
     harness.task_id = str(task.task_id)
@@ -270,6 +286,12 @@ def _run_real_episode(
     try:
         engine = EngineCls(config)
         engine.start()
+        ev = getattr(engine, "evaluator", None)
+        if ev is not None and hasattr(ev, "update"):
+            try:
+                ev.update(engine.environment, engine.agents)
+            except Exception as exc:  # noqa: BLE001 — never let scoring kill the run
+                print(f"[warn] evaluator.update failed: {exc}")
     finally:
         os.chdir(prev_cwd)
 
@@ -318,7 +340,8 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
 # ------------------------------------------------------------------------ CLI
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(description="Run governed-memory baselines on MultiAgentBench")
-    ap.add_argument("--benchmark", required=True, choices=BENCHMARKS)
+    ap.add_argument("--benchmark", required=True,
+                    help=f"one of {BENCHMARKS}, comma-separated, or 'all'")
     ap.add_argument("--baseline", default="heuristic",
                     help=f"one of {BASELINES} or 'multi'")
     ap.add_argument("--split", default="all", help="all|train|test (deterministic by task_id)")
@@ -337,7 +360,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = ap.parse_args(argv)
 
     task_ids = [int(x) for x in args.task_ids.split(",") if x.strip()] or None
-    tasks = load_tasks(args.benchmark, limit=args.limit, start=args.start, task_ids=task_ids)
+    bench_names = [b.strip() for b in args.benchmark.split(",") if b.strip()]
+    if "all" in bench_names:
+        bench_names = list(BENCHMARKS)
+    tasks: List[BenchmarkTask] = []
+    for bn in bench_names:
+        if bn not in BENCHMARKS:
+            raise ValueError(f"unknown benchmark {bn!r}; choose from {BENCHMARKS} or 'all'")
+        tasks += load_tasks(bn, limit=args.limit, start=args.start, task_ids=task_ids)
     tasks = _apply_split(tasks, args.split)
     if args.worker_model:
         import os
