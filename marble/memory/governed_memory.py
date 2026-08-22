@@ -12,7 +12,8 @@ class _NullTrace:
     def log_proposal(self, proposal: object) -> None:
         pass
 
-    def log_decision(self, proposal: object, target: object) -> None:
+    def log_decision(self, proposal: object, target: object,
+                     memory_id: Optional[str] = None) -> None:
         pass
 
     def log_read(self, memory_id: str, reader_id: str, task_id: str) -> None:
@@ -43,7 +44,8 @@ class GovernedMemory:
         ]
         target = self.controller.decide(proposal, current_state)
         item = self.bank.apply(proposal, target)
-        self.trace.log_decision(proposal, target)
+        self.trace.log_decision(proposal, target,
+                                memory_id=item.memory_id if item else None)
         return item
 
     def visible_keys(
