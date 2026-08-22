@@ -529,9 +529,13 @@ class Evaluator:
                 full_task_description.find(requirements_end)
             ].strip()
 
-            solution_path = "marble/workspace/solution.py"
+            solution_path = "workspace/solution.py"
             solution_content = ""
-            if os.path.exists(solution_path):
+            # ponytail: prefer the result the runner already extracted; only fall
+            # back to the on-disk solution when it wasn't passed in
+            if code_result and code_result.strip():
+                solution_content = code_result
+            elif os.path.exists(solution_path):
                 with open(solution_path, 'r', encoding='utf-8') as f:
                     solution_content = f.read()
 
