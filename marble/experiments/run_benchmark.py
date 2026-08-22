@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,11 @@ from marble.experiments.engine_bridge import MemoryStep, build_governed_engine_c
 from marble.memory import GovernedMemory, MemoryBank, TraceLogger
 
 BASELINES = ("no_memory", "global_always", "private_only", "heuristic", "learned_controller")
+
+# ponytail: dataset llm is often ""; workers run through litellm, so a missing
+# model string must not reach BaseAgent as "". Fall back to an env-overridable
+# default; if still empty, _require_worker_model errors clearly.
+DEFAULT_WORKER_MODEL = "gpt-3.5-turbo"
 
 _WORKER_KEY_VARS = ("OPENAI_API_KEY", "NVAPI_KEY", "MARBLE_API_KEY")
 
@@ -112,7 +118,8 @@ def task_config(
         "output": dict(task.output),
         # ponytail: Config reads coordinate_mode (config.py), not coordination_mode
         "coordinate_mode": "graph",
-        "llm": llm or task.llm,  # agents fall back to config.llm; must be non-empty
+        # agents fall back to config.llm; never empty (litellm rejects "")
+        "llm": llm or task.llm or os.environ.get("MARBLE_WORKER_MODEL", "") or DEFAULT_WORKER_MODEL,
     }
     # ponytail: original JSONL leaves env type/max_iterations empty; fill so
     # Engine.__init__ does not raise on an unsupported empty type
@@ -192,6 +199,16 @@ def run_task(
     cfg = task_config(
         task, baseline, max_cards, max_reads_per_step, retriever, llm, ablation
     )
+    # ponytail: ablations mutate the config memory block (policy->controller name,
+    # retrieval:none->max_cards=0). make_controller is keyed by baseline, so the
+    # runner must read the *effective* controller/max_cards back out of config.
+    effective_baseline = baseline
+    effective_max_cards = max_cards
+    mem_block = cfg.get("memory")
+    if baseline != "no_memory" and isinstance(mem_block, dict):
+        effective_baseline = mem_block.get("controller", baseline)
+        if "max_cards" in mem_block:
+            effective_max_cards = mem_block["max_cards"]
     if max_iterations is not None:
         cfg["environment"]["max_iterations"] = max_iterations
     # ponytail: Engine opens output.file_path; leave empty -> open("") IOError
@@ -214,8 +231,8 @@ def run_task(
 
     try:
         metrics = _run_real_episode(
-            task, baseline, tdir, cfg,
-            max_cards=max_cards,
+            task, effective_baseline, tdir, cfg,
+            max_cards=effective_max_cards,
             max_reads_per_step=max_reads_per_step,
             controller_checkpoint=controller_checkpoint,
             llm=llm,
@@ -378,8 +395,11 @@ def _benchmark_score(benchmark: str, evaluator, task_content: str,
                          if isinstance(v, (int, float))]
             return sum(vals) / len(vals) / 5.0 if vals else base
         elif benchmark == "database":
-            evaluator.evaluate_task_db(task_content, result_text, [], 0, [])
-            return 1.0 if (m.get("task_evaluation") or {}).get("root_cause") else base
+            # use whatever the engine/environment already scored; don't overwrite
+            # with empty lists (that would force 0 regardless of real result)
+            te = m.get("task_evaluation") or {}
+            rc = te.get("root_cause") or te.get("predicted")
+            return 1.0 if rc else base
         elif benchmark == "coding":
             evaluator.evaluate_code_quality(task_content, result_text)
             cq = m.get("code_quality") or {}
