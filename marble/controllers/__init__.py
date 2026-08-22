@@ -21,14 +21,17 @@ from .heuristic import (
     HeuristicController,
     PrivateOnlyController,
 )
+from .json_controller import VALID_VISIBILITIES, JsonController
 from .local_policy import LocalPolicyController, features
 
 __all__ = [
     "AbsentController",
     "GlobalAlwaysController",
     "HeuristicController",
+    "JsonController",
     "LocalPolicyController",
     "MemoryController",
     "PrivateOnlyController",
+    "VALID_VISIBILITIES",
     "features",
 ]
