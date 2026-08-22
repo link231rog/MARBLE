@@ -94,7 +94,7 @@ def test_real_run_without_any_key_records_error(tmp_path, monkeypatch):
     assert summary["status"] == "error"
     err = (tdir / "errors.log").read_text()
     assert "worker API key" in err
-    assert (tdir / "memory_trace.jsonl").exists() is False or True  # trace may pre-exist
+    assert not (tdir / "memory_trace.jsonl").exists()  # no trace before real episode
 
 
 def test_plan_runs_multi_expands_once():

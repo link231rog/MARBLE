@@ -74,6 +74,7 @@ def task_config(
     baseline: str,
     max_cards: int = 6,
     max_reads_per_step: int = 2,
+    retriever: str = "key_first",
 ) -> Dict[str, Any]:
     """Original record + governed memory block injected (source untouched)."""
     cfg: Dict[str, Any] = {
@@ -92,7 +93,7 @@ def task_config(
             **cfg["memory"],
             "backend": "governed",
             "controller": baseline,
-            "retriever": "key_first",
+            "retriever": retriever,
             "max_cards": max_cards,
             "max_reads_per_step": max_reads_per_step,
         }
@@ -135,16 +136,16 @@ def run_task(
     max_iterations: Optional[int] = None,
     max_cards: int = 6,
     max_reads_per_step: int = 2,
+    retriever: str = "key_first",
     controller_checkpoint: Optional[str] = None,
 ) -> Dict[str, Any]:
     if seed is not None:
         random.seed(seed)
-    # method segment first: --baseline multi must never collide two methods in one dir
     tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
     tdir.mkdir(parents=True, exist_ok=True)
     errors: List[str] = []
 
-    cfg = task_config(task, baseline, max_cards, max_reads_per_step)
+    cfg = task_config(task, baseline, max_cards, max_reads_per_step, retriever)
     if max_iterations is not None:
         cfg["environment"]["max_iterations"] = max_iterations
     _write_config(tdir / "config.yaml", cfg)
@@ -282,6 +283,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             seed=args.seed,
             max_iterations=args.max_iterations,
             max_reads_per_step=args.max_reads_per_step,
+            retriever=args.retrieval,
             controller_checkpoint=args.controller_checkpoint,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")

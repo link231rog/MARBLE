@@ -97,7 +97,7 @@ def run_episode(
     # coder turn
     if coder_adapter is not None:
         cards = coder_adapter.before_step(task_id, "coder", query=task)
-        visible_key_events += bool(cards)
+        visible_key_events += len(cards)
         mem_section = (
             "Notes from teammates:\n" + format_cards(cards)
             if cards else ""
@@ -115,7 +115,7 @@ def run_episode(
     review_context = f"Previous solution:\n```python\n{code}\n```\n"
     if reviewer_adapter is not None:
         cards = reviewer_adapter.before_step(task_id, "reviewer", query=task)
-        visible_key_events += bool(cards)
+        visible_key_events += len(cards)
         sections = []
         for card in cards:
             try:
