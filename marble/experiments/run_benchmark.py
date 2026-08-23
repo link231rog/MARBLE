@@ -311,7 +311,11 @@ def _run_real_episode(
     from marble.memory.rewards import proposal_rewards
 
     mem = make_governed(
-        baseline, tdir / "memory_trace.jsonl", controller_checkpoint, ablation
+        baseline,
+        # absolute: the engine chdirs into marble/ mid-run; a relative path breaks
+        str((tdir / "memory_trace.jsonl").resolve()),
+        controller_checkpoint,
+        ablation,
     )
     # ponytail: selector "top" makes agents read the top-ranked cards without an
     # extra API call, so memory actually influences the task
