@@ -14,24 +14,24 @@ from marble.memory import (
 
 
 def test_episode_reward_formula():
-    stats = EpisodeStats(task_score=1.0, coordination_score=0.5,
-                         read_tokens=512, active_global_tokens=1024,
-                         token_budget=1024)
-    r = episode_reward(stats)
-    assert abs(r - (1.0 + 0.25 * 0.5 - 0.10 * 0.5 - 0.05 * 1.0)) < 1e-9
+    stats = EpisodeStats(task_score=1.0, read_tokens=512,
+                         active_global_tokens=1024, token_budget=1024)
+    # memory_cost = (512 + 1024 + 0)/1024 = 1.5 ; R = 1.0 - 0.05*1.5
+    assert abs(episode_reward(stats) - (1.0 - 0.05 * 1.5)) < 1e-9
 
 
 def test_episode_reward_communication_cost():
     stats = EpisodeStats(task_score=1.0, communication_tokens=256, token_budget=1024)
-    assert abs(episode_reward(stats) - (1.0 - 0.10 * 0.25)) < 1e-9
-    # default zero keeps old formula
+    # memory_cost = 256/1024 = 0.25 ; R = 1.0 - 0.05*0.25
+    assert abs(episode_reward(stats) - (1.0 - 0.05 * 0.25)) < 1e-9
+    # zero cost leaves task score untouched
     assert episode_reward(EpisodeStats(task_score=1.0)) == 1.0
 
 
-def _proposal(pid, agent, value):
+def _proposal(pid, agent, value, topics=()):
     return MemoryProposal(proposal_id=pid, task_id="t", agent_id=agent,
                           source="worker", title=value[:8], raw_value=value,
-                          step_index=1)
+                          step_index=1, topics=topics)
 
 
 def _events(tmp_path):
@@ -49,14 +49,15 @@ def _events(tmp_path):
 
 def test_proposal_rewards_non_owner_read_weighted(tmp_path):
     events, m1, m2 = _events(tmp_path)
-    credits = proposal_rewards(events, r_episode=1.0)
+    credits = proposal_rewards(events, task_score=1.0)
     assert credits[m2.memory_id] < 0  # unread: pure storage cost
-    # read by non-owner: -storage + 1.25 * (1.0 - 0)
+    # read by non-owner: A_e=1.0, mult=1+0.25, minus lambda*cost
+    expected = 1.0 * (1 + 0.25) - 0.05 * token_count("alpha beta gamma") / 4096
+    assert abs(credits[m1.memory_id] - expected) < 1e-9
     assert credits[m1.memory_id] > credits[m2.memory_id]
-    assert abs(credits[m1.memory_id] - (-3 / 4096 + 1.25)) < 1e-9
 
 
-def test_proposal_rewards_owner_read_baseline(tmp_path):
+def test_proposal_rewards_owner_read_zero_advantage(tmp_path):
     mem = GovernedMemory(MemoryBank(), PrivateOnlyController())
     item = mem.submit(_proposal("p1", "coder", "only mine"))
     assert item is not None
@@ -66,6 +67,7 @@ def test_proposal_rewards_owner_read_baseline(tmp_path):
          "proposal": {"agent_id": "coder", "raw_value": "only mine"}},
         {"event": "memory_read", "memory_id": item.memory_id,
          "reader_id": "coder", "task_id": "t"},
-    ], r_episode=0.5, running_baseline=0.5)
-    expected = -token_count("only mine") / 4096
+    ], task_score=0.5, same_task_baseline=0.5)
+    # advantage 0 -> credit is just -lambda*cost
+    expected = -0.05 * token_count("only mine") / 4096
     assert abs(credits[item.memory_id] - expected) < 1e-9

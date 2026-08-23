@@ -16,6 +16,7 @@ class MemoryProposal:
     title: str
     raw_value: str
     step_index: int
+    topics: tuple = ()  # fixed-taxonomy tags, soft input only (schema-and-reward.md)
 
 
 @dataclass(frozen=True)
