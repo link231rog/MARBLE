@@ -91,7 +91,7 @@ def train_rl(
             continue
         episodes += 1
         # ponytail: running-baseline omitted — single-method offline replay only
-        credits = proposal_rewards(events, r_episode=r_episode)
+        credits = proposal_rewards(events, task_score=r_episode)
         for _ in range(epochs):
             steps += trainer.update_trace(events, credits)
     controller.save(out_path)

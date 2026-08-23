@@ -12,9 +12,17 @@ from typing import Any, Dict, Sequence
 
 from marble.memory.schema import MemoryProposal, MemoryTargetState
 
-FACTORS = ("policy", "schema_field", "retrieval", "state_update", "reward", "training")
+FACTORS = ("policy", "schema_field", "retrieval", "state_update", "reward", "training", "input")
 
 SCHEMA_FIELDS = ("title", "value", "source", "agent_id", "task_id", "step_index")
+
+# Input-block ablation -> JsonController drop_fields (schema-and-reward.md §Input ablations)
+INPUT_ABLATIONS = {
+    "no_agent_tags": ("agent_capabilities",),
+    "no_topic_tags": ("topics",),
+    "no_memory_summary": ("memory_summary",),
+    "no_active_memory_index": ("active_memory_index",),
+}
 
 
 def parse_ablation(spec: str) -> tuple:
@@ -60,6 +68,10 @@ def controller_kwargs(factor: str, option: str) -> Dict[str, Any]:
         if option not in SCHEMA_FIELDS:
             raise ValueError(f"schema_field option must be one of {SCHEMA_FIELDS}")
         return {"drop_fields": (option,)}
+    if factor == "input":
+        if option not in INPUT_ABLATIONS:
+            raise ValueError(f"input option must be one of {sorted(INPUT_ABLATIONS)}")
+        return {"drop_fields": INPUT_ABLATIONS[option]}
     return {}
 
 
@@ -71,8 +83,10 @@ def wrap_controller(controller, factor: str, option: str):
 
 def reward_override(factor: str, option: str) -> Dict[str, float]:
     """Passed to proposal_rewards at evaluation/training time."""
-    if factor == "reward" and option == "no_reuse":
-        return {"reuse_weight_non_owner": 0.0, "reuse_weight_owner": 0.0}
+    if factor == "reward" and option == "beta0":
+        return {"beta": 0.0}
+    if factor == "reward" and option == "lambda0":
+        return {"lambda_": 0.0}
     return {}
 
 

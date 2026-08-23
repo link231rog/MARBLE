@@ -64,15 +64,34 @@ def test_unknown_supersedes_target_rejected():
     assert "not found" in ctrl.rejections[0]["reason"]
 
 
-def test_prompt_contains_only_allowed_fields():
+def test_prompt_follows_four_block_contract():
     seen = {}
     def llm(prompt):
         seen["prompt"] = prompt
         return '{"visibility": "global", "supersedes": null}'
-    ctrl = JsonController(llm, max_value_chars=20)
+    ctrl = JsonController(llm, max_value_chars=20,
+                          agent_capabilities=("coding",), task_goal="solve fizzbuzz")
     ctrl.decide(_proposal(value="x" * 100), [])
     p = seen["prompt"]
-    for field in ("title:", "value:", "source:", "agent_id:", "task_id:", "step_index:",
-                  "active memories:", "same_title_active:"):
-        assert field in p
+    # four frozen input blocks present
+    for block in ("[TASK]", "[AGENT]", "[PROPOSAL]", "[ACTIVE MEMORY INDEX]"):
+        assert block in p
+    assert "task_goal: solve fizzbuzz" in p
+    assert "agent_capabilities: ['coding']" in p
+    # contract-excluded fields must NOT leak into the prompt
+    for forbidden in ("task_id:", "step_index:", "proposal_id:", "agent_id:"):
+        assert forbidden not in p
+    # value truncation honored
     assert len(p.split("value: ", 1)[1].split("\n")[0]) <= 20
+
+
+def test_input_ablation_hides_active_memory_index():
+    seen = {}
+    def llm(prompt):
+        seen["prompt"] = prompt
+        return '{"visibility": "global", "supersedes": null}'
+    ctrl = JsonController(llm, drop_fields=("active_memory_index",))
+    target = ctrl.decide(_proposal(), [])
+    assert "[ACTIVE MEMORY INDEX]" not in seen["prompt"]
+    # ablation forces supersedes null even if model asks for it
+    assert target.supersedes is None

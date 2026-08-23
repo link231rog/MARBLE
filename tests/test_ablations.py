@@ -72,7 +72,7 @@ def test_task_config_ablation_marks_memory_block():
     assert cfg["memory"]["max_cards"] == 6  # input untouched
 
 
-def test_reward_override_zeroes_reuse(tmp_path):
+def test_reward_override_beta_and_lambda(tmp_path):
     from marble.memory.rewards import proposal_rewards
 
     events = [
@@ -80,7 +80,14 @@ def test_reward_override_zeroes_reuse(tmp_path):
          "proposal": {"agent_id": "a1", "raw_value": "x y"}},
         {"event": "memory_read", "memory_id": "m1", "reader_id": "a2"},
     ]
-    base = proposal_rewards(events, r_episode=1.0)
-    ablated = proposal_rewards(events, r_episode=1.0, **reward_override("reward", "no_reuse"))
-    assert base["m1"] > 0 > ablated["m1"]  # reuse credit removed, storage cost remains
+    base = proposal_rewards(events, task_score=1.0)
+    beta0 = proposal_rewards(events, task_score=1.0, **reward_override("reward", "beta0"))
+    lambda0 = proposal_rewards(events, task_score=1.0, **reward_override("reward", "lambda0"))
+    # beta0 removes cross-agent multiplier -> smaller credit than base
+    assert beta0["m1"] < base["m1"]
+    # lambda0 removes storage cost -> larger than base
+    assert lambda0["m1"] > base["m1"]
+    assert reward_override("reward", "beta0") == {"beta": 0.0}
+    assert reward_override("reward", "lambda0") == {"lambda_": 0.0}
+    assert controller_kwargs("input", "no_topic_tags") == {"drop_fields": ("topics",)}
     assert reward_override("training", "scratch") == {}
