@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import random
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -272,6 +273,7 @@ def run_task(
     except Exception as exc:  # noqa: BLE001 — one bad task must not kill the sweep
         summary["status"] = "error"
         errors.append(f"{type(exc).__name__}: {exc}")
+        errors.append(traceback.format_exc())
 
     if errors:
         (tdir / "errors.log").write_text("\n".join(errors) + "\n", encoding="utf-8")
