@@ -17,6 +17,10 @@ from marble.utils.logger import get_logger
 
 
 def json_parse(input_str: str) -> Dict[str, Any]:
+    if not isinstance(input_str, str):
+        # Reasoning models can return content=None when the token budget is
+        # consumed by reasoning_content; treat as unparseable, not a crash.
+        return {}
     """
     Extracts the JSON part from a string that contains a JSON block and parses it into a dictionary.
 
@@ -479,7 +483,7 @@ class EnginePlanner:
             llm_model=self.model,
             messages=messages,
             return_num=1,
-            max_token_num=256,
+            max_token_num=2048,
             temperature=0.3,
             top_p=1.0,
         )
