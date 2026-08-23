@@ -7,7 +7,6 @@ import arxiv
 import requests
 from beartype.typing import Any, Dict, List, Optional, Set
 from bs4 import BeautifulSoup
-from keybert import KeyBERT
 from pydantic import BaseModel, Field
 from PyPDF2 import PdfReader
 from tqdm import tqdm
@@ -70,6 +69,8 @@ def get_related_papers(
     keyword = ""
 
     if query is not None:
+        from keybert import KeyBERT  # lazy: pulls torch, only needed for research env
+
         kw_model = KeyBERT()
         extraction_results = kw_model.extract_keywords(
             query, keyphrase_ngram_range=(1, 3), stop_words="english"
