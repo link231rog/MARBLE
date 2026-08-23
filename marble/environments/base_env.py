@@ -43,7 +43,9 @@ class BaseEnvironment:
         # Implement a method to compare result to ground truth
         # For simplicity, check if result matches ground_truth exactly
         if result:
-            return result.strip().lower() == ground_truth.strip().lower()
+            # coding actions store dicts (e.g. {'success': False, ...}) in state;
+            # coerce so scoring never crashes on a non-string payload
+            return str(result).strip().lower() == str(ground_truth).strip().lower()
         else:
             return False
 
