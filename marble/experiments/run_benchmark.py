@@ -120,6 +120,15 @@ def task_config(
         "coordinate_mode": "graph",
         # agents fall back to config.llm; never empty (litellm rejects "")
         "llm": llm or task.llm or os.environ.get("MARBLE_WORKER_MODEL", "") or DEFAULT_WORKER_MODEL,
+        # spec §6.4: evaluator must use a fixed non-empty model, never ""
+        "metrics": {
+            **dict(task.metrics),
+            "evaluate_llm": (
+                os.environ.get("MARBLE_EVAL_MODEL")
+                or task.metrics.get("evaluate_llm")
+                or "gpt-3.5-turbo"
+            ),
+        },
     }
     # ponytail: original JSONL leaves env type/max_iterations empty; fill so
     # Engine.__init__ does not raise on an unsupported empty type
@@ -222,12 +231,28 @@ def run_task(
         "task_id": task.task_id,
         "seed": seed,
         "status": "ok",
+        # spec §11.2/§11.3: record the exact models used, all non-empty
+        "worker_model": llm or task.llm or os.environ.get("MARBLE_WORKER_MODEL", "") or DEFAULT_WORKER_MODEL,
+        "controller_model": (
+            baseline if baseline != "learned_controller"
+            else os.environ.get("NVAPI_MODEL") or "learned_controller(nvidia)"
+        ),
+        "evaluator_model": os.environ.get("MARBLE_EVAL_MODEL", "") or cfg["metrics"].get("evaluate_llm", ""),
     }
 
     if dry_run:
         summary["status"] = "dry_run"
         (tdir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return summary
+
+    # spec §10/§11.9: never overwrite a completed episode on re-run; resume skips it
+    completed = tdir / "summary.json"
+    if completed.exists():
+        try:
+            if json.loads(completed.read_text()).get("status") == "ok":
+                return json.loads(completed.read_text())
+        except Exception:
+            pass
 
     try:
         metrics = _run_real_episode(
@@ -240,6 +265,9 @@ def run_task(
             retriever=retriever,
         )
         summary.update(metrics)
+        # spec §10: empty evaluator score -> mark, do not fake a zero
+        if metrics.get("task_score", 0) == 0 and not (tdir / "output.json").exists():
+            summary["status"] = "score_unavailable"
     except Exception as exc:  # noqa: BLE001 — one bad task must not kill the sweep
         summary["status"] = "error"
         errors.append(f"{type(exc).__name__}: {exc}")
@@ -306,6 +334,16 @@ def _run_real_episode(
     try:
         engine = EngineCls(config)
         engine.start()
+        # spec §10: persist rejected controller outputs (redacted: no keys/prompts)
+        controller = getattr(mem, "controller", None)
+        if controller is not None and hasattr(controller, "rejections") and controller.rejections:
+            dbg = [
+                {"proposal_id": r.get("proposal_id"), "reason": r.get("reason"),
+                 "raw": r.get("raw")}
+                for r in controller.rejections
+            ]
+            (tdir / "controller_debug.jsonl").write_text(
+                "\n".join(json.dumps(x) for x in dbg) + "\n", encoding="utf-8")
         ev = getattr(engine, "evaluator", None)
         if ev is not None and hasattr(ev, "update"):
             try:

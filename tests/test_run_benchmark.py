@@ -67,6 +67,9 @@ def test_dry_run_writes_layout_without_engine(tmp_path):
     assert on_disk["status"] == "dry_run"
     assert on_disk["method"] == "heuristic" and on_disk["seed"] == 7
     assert summary["status"] == "dry_run"
+    # spec §11.2/§11.3: model names recorded, all non-empty
+    assert on_disk["worker_model"] and on_disk["controller_model"] == "heuristic"
+    assert on_disk["evaluator_model"]
 
 
 def test_multi_run_keeps_every_method_on_disk(tmp_path):
@@ -93,13 +96,16 @@ def test_real_run_without_any_key_records_error(tmp_path, monkeypatch):
     assert not (tdir / "memory_trace.jsonl").exists()  # no trace before real episode
 
 
-def test_task_config_uses_coordinate_mode_key_and_wires_llm():
+def test_task_config_uses_coordinate_mode_key_and_wires_llm(monkeypatch):
     # regression: Config reads coordinate_mode; coordination_mode would crash
+    monkeypatch.setenv("MARBLE_EVAL_MODEL", "fixed-eval-model")
     t = _task()
     cfg = task_config(t, "heuristic", llm="gpt-4o-mini")
     assert cfg["coordinate_mode"] == "graph"
     assert "coordination_mode" not in cfg
     assert cfg["llm"] == "gpt-4o-mini"
+    # spec §6.4: evaluator model recorded, never empty
+    assert cfg["metrics"]["evaluate_llm"] == "fixed-eval-model"
 
 
 def test_apply_split_deterministic():
