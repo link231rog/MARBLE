@@ -377,7 +377,10 @@ def _run_real_episode(
     if ablation:
         factor, option = parse_ablation(ablation)
         reward_kw = reward_override(factor, option)
-    credits = proposal_rewards(events, r_episode=float(metrics.get("task_score", 0.0)), **reward_kw)
+    credits = proposal_rewards(
+        events, task_score=float(metrics.get("task_score", 0.0)),
+        same_task_baseline=0.0, **reward_kw
+    )
     (tdir / "reward.json").write_text(json.dumps(credits, indent=2), encoding="utf-8")
     return metrics
 

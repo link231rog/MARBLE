@@ -12,43 +12,81 @@ from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
 
 VALID_VISIBILITIES = ("absent", "private", "global")
 
+# Fixed initial topic taxonomy (schema-and-reward.md). Soft input only.
+TOPIC_TAXONOMY = (
+    "code", "research", "retrieval", "database",
+    "testing", "planning", "analysis",
+)
+
+# Input-block ablation names accepted in drop_fields.
+_BLOCK_DROPS = frozenset({
+    "agent_capabilities", "topics", "memory_summary", "active_memory_index",
+})
+
 
 class JsonController:
-    """decide() via llm_fn(prompt) -> str; strict-JSON contract enforced here."""
+    """decide() via llm_fn(prompt) -> str; strict-JSON contract enforced here.
+
+    Prompt follows the four frozen input blocks (TASK/AGENT/PROPOSAL/ACTIVE
+    MEMORY INDEX). Excluded by contract: task_id, proposal_id, agent identity,
+    step/subgoal, outcome, and other agents' private content.
+    """
 
     def __init__(
         self,
         llm_fn: Callable[[str], str],
         max_value_chars: int = 512,
         drop_fields: tuple = (),
+        agent_capabilities: tuple = (),
+        task_goal: str = "",
     ):
         self.llm_fn = llm_fn
         self.max_value_chars = max_value_chars
         self.drop_fields = frozenset(drop_fields)
+        self.agent_capabilities = tuple(agent_capabilities)
+        self.task_goal = task_goal
         self.rejections: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------ prompt
     def build_prompt(self, proposal: MemoryProposal, current_state: Sequence[MemoryItem]) -> str:
         same_title = _find_same_title(proposal, current_state)
-        fields = {
-            "title": proposal.title,
-            "value": proposal.raw_value[: self.max_value_chars],
-            "source": proposal.source,
-            "agent_id": proposal.agent_id,
-            "task_id": proposal.task_id,
-            "step_index": proposal.step_index,
-        }
-        lines = [
-            "Decide whether this agent output should become shared team memory.",
-        ]
-        lines += [f"{name}: {val}" for name, val in fields.items() if name not in self.drop_fields]
-        lines.append("active memories:")
-        lines += [
-            f"- {it.memory_id} | {it.title} | {it.visibility} | owner={it.owner_id}"
-            for it in current_state
-            if it.active and it.task_id == proposal.task_id
-        ]
-        lines.append(f"same_title_active: {'true' if same_title else 'false'}")
+        lines: List[str] = []
+
+        # [TASK] — task context, present in all variants
+        lines.append("[TASK]")
+        lines.append(f"task_goal: {self.task_goal or '(unspecified)'}")
+
+        # [AGENT]
+        if "agent_capabilities" not in self.drop_fields:
+            lines.append("[AGENT]")
+            lines.append(f"agent_capabilities: {list(self.agent_capabilities)}")
+
+        # [PROPOSAL]
+        lines.append("[PROPOSAL]")
+        if "title" not in self.drop_fields:
+            lines.append(f"title: {proposal.title}")
+        if "value" not in self.drop_fields:
+            lines.append(f"value: {proposal.raw_value[: self.max_value_chars]}")
+        if "source" not in self.drop_fields:
+            lines.append(f"source: {proposal.source}")
+        if "topics" not in self.drop_fields and proposal.topics:
+            lines.append(f"topics: {list(proposal.topics)}")
+
+        # [ACTIVE MEMORY INDEX]
+        if "active_memory_index" not in self.drop_fields:
+            lines.append("[ACTIVE MEMORY INDEX]")
+            for it in current_state:
+                if not (it.active and it.task_id == proposal.task_id):
+                    continue
+                summary = "" if "memory_summary" in self.drop_fields else f" | {it.title}"
+                lines.append(
+                    f"- memory_id: {it.memory_id} | title: {it.title}{summary} | "
+                    f"visibility: {it.visibility} | owner_id: {it.owner_id}"
+                )
+            lines.append(f"same_title_active: {'true' if same_title else 'false'}")
+        else:
+            lines.append("same_title_active: 'false' (active memory hidden)")
+
         lines.append(
             'Respond with ONLY this JSON: {"visibility": "absent"|"private"|"global", '
             '"supersedes": null} — replace supersedes with a listed memory_id/title '
@@ -74,6 +112,9 @@ class JsonController:
         if visibility == "absent":
             return MemoryTargetState(exists=False, visibility="absent")
         supersedes = parsed.get("supersedes")
+        # input ablation: active memory hidden -> controller may not supersede
+        if "active_memory_index" in self.drop_fields:
+            supersedes = None
         resolved = _resolve_supersedes(supersedes, current_state, proposal)
         return MemoryTargetState(
             exists=True,
