@@ -69,13 +69,16 @@ def get_related_papers(
     keyword = ""
 
     if query is not None:
-        from keybert import KeyBERT  # lazy: pulls torch, only needed for research env
+        try:
+            from keybert import KeyBERT  # lazy: pulls torch, only needed for research env
 
-        kw_model = KeyBERT()
-        extraction_results = kw_model.extract_keywords(
-            query, keyphrase_ngram_range=(1, 3), stop_words="english"
-        )
-        keyword = " ".join([word for word, _ in extraction_results])
+            kw_model = KeyBERT()
+            extraction_results = kw_model.extract_keywords(
+                query, keyphrase_ngram_range=(1, 3), stop_words="english"
+            )
+            keyword = " ".join([word for word, _ in extraction_results])
+        except ImportError:
+            keyword = query
 
     arxiv_query_parts = []
 
