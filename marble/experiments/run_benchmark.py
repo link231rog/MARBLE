@@ -220,9 +220,10 @@ def run_task(
             effective_max_cards = mem_block["max_cards"]
     if max_iterations is not None:
         cfg["environment"]["max_iterations"] = max_iterations
-    # ponytail: Engine opens output.file_path; leave empty -> open("") IOError
+    # ponytail: Engine opens output.file_path; leave empty -> open("") IOError.
+    # Absolute: engine chdir's into marble/ for evaluator prompts, breaking relative paths.
     if not str(cfg["output"].get("file_path", "")).strip():
-        cfg["output"]["file_path"] = str(tdir / "output.json")
+        cfg["output"]["file_path"] = str((tdir / "output.json").resolve())
     _write_config(tdir / "config.yaml", cfg)
 
     summary: Dict[str, Any] = {
