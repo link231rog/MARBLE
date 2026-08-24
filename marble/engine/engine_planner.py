@@ -66,7 +66,9 @@ def json_parse(input_str: str) -> Dict[str, Any]:
     try:
         data = json.loads(json_str)
     except json.JSONDecodeError as e:
-        raise ValueError("JSON parsing failed. Please check the input format.") from e
+        # Reasoning models often emit truncated/malformed JSON; degrade to an
+        # empty plan (callers .get()) instead of killing the whole episode.
+        return {}
 
     return data
 
