@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import random
+import socket
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -479,6 +480,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", default="runs")
     args = ap.parse_args(argv)
+
+    # ponytail: global floor so any untimeouted raw call (arxiv fetch, requests) can't hang forever
+    socket.setdefaulttimeout(int(os.environ.get("MARBLE_SOCKET_TIMEOUT", "120")))
 
     task_ids = [int(x) for x in args.task_ids.split(",") if x.strip()] or None
     bench_names = [b.strip() for b in args.benchmark.split(",") if b.strip()]
