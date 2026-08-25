@@ -120,8 +120,10 @@ def task_config(
         "output": dict(task.output),
         # ponytail: Config reads coordinate_mode (config.py), not coordination_mode
         "coordinate_mode": "graph",
-        # agents fall back to config.llm; never empty (litellm rejects "")
-        "llm": llm or task.llm or os.environ.get("MARBLE_WORKER_MODEL", "") or DEFAULT_WORKER_MODEL,
+        # agents fall back to config.llm; never empty (litellm rejects "").
+        # ponytail: deployment pins worker via MARBLE_WORKER_MODEL env; that MUST
+        # override per-dataset llm (e.g. minecraft ships "gpt-4o-mini").
+        "llm": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
         # spec §6.4: evaluator must use a fixed non-empty model, never ""
         "metrics": {
             **dict(task.metrics),
@@ -235,7 +237,7 @@ def run_task(
         "seed": seed,
         "status": "ok",
         # spec §11.2/§11.3: record the exact models used, all non-empty
-        "worker_model": llm or task.llm or os.environ.get("MARBLE_WORKER_MODEL", "") or DEFAULT_WORKER_MODEL,
+        "worker_model": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
         "controller_model": (
             baseline if baseline != "learned_controller"
             else os.environ.get("NVAPI_MODEL") or "learned_controller(nvidia)"
