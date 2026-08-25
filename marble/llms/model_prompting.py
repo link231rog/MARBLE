@@ -28,6 +28,10 @@ def model_prompting(
         base_url = "https://api.ohmygpt.com/v1"
     else:
         base_url = None
+    extra_body = {}
+    if "Qwen" in llm_model:
+        # ponytail: disable Qwen3 thinking so content is populated and generation is fast
+        extra_body["chat_template_kwargs"] = {"enable_thinking": False}
     completion = litellm.completion(
         model=llm_model,
         messages=messages,
@@ -40,8 +44,12 @@ def model_prompting(
         tool_choice=tool_choice,
         base_url=base_url,
         timeout=300,
+        **extra_body,
     )
     message_0: Message = completion.choices[0].message
-    assert message_0 is not None
+    if message_0 is None:
+        message_0 = Message(content="", role="assistant")
+    elif message_0.content is None:
+        message_0.content = getattr(message_0, "reasoning_content", None) or ""
     assert isinstance(message_0, Message)
     return [message_0]
