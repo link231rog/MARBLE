@@ -39,6 +39,7 @@ def model_prompting(
         tools=tools,
         tool_choice=tool_choice,
         base_url=base_url,
+        timeout=300,
     )
     message_0: Message = completion.choices[0].message
     assert message_0 is not None
