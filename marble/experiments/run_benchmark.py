@@ -350,7 +350,7 @@ def _run_real_episode(
                  "raw": r.get("raw")}
                 for r in controller.rejections
             ]
-            (tdir / "controller_debug.jsonl").write_text(
+            (tdir / "controller_debug.jsonl").resolve().write_text(
                 "\n".join(json.dumps(x) for x in dbg) + "\n", encoding="utf-8")
         ev = getattr(engine, "evaluator", None)
         if ev is not None and hasattr(ev, "update"):
