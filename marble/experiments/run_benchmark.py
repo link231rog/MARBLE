@@ -501,8 +501,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     for bn in bench_names:
         if bn not in BENCHMARKS:
             raise ValueError(f"unknown benchmark {bn!r}; choose from {BENCHMARKS} or 'all'")
-        tasks += load_tasks(bn, limit=args.limit, start=args.start, task_ids=task_ids)
+        tasks += load_tasks(bn, start=args.start, task_ids=task_ids)
     tasks = _apply_split(tasks, args.split)
+    if args.limit:
+        tasks = tasks[: args.limit]
     if args.worker_model:
         os.environ.setdefault("MARBLE_WORKER_MODEL", args.worker_model)
 
