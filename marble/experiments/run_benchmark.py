@@ -495,8 +495,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         tasks += load_tasks(bn, limit=args.limit, start=args.start, task_ids=task_ids)
     tasks = _apply_split(tasks, args.split)
     if args.worker_model:
-        import os
-
         os.environ.setdefault("MARBLE_WORKER_MODEL", args.worker_model)
 
     # --baseline multi expands to all methods
