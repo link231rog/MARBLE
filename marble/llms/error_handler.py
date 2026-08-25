@@ -32,10 +32,12 @@ def api_calling_error_exponential_backoff(
                 modified_base_wait_time = base_wait_time
 
             attempts = 0
+            last_exc: Optional[Exception] = None
             while attempts < modified_retries:
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
+                    last_exc = e
                     wait_time = modified_base_wait_time * (2**attempts)
                     print(f"Attempt {attempts + 1} failed: {e}")
                     print(f"Waiting {wait_time} seconds before retrying...")
@@ -44,6 +46,11 @@ def api_calling_error_exponential_backoff(
             print(
                 f"Failed to execute '{func.__name__}' after {modified_retries} retries."
             )
+            # ponytail: re-raise instead of returning None — None into a typed API
+            # crashes the caller with a confusing type violation; a real error is
+            # catchable and logged per-call site.
+            if last_exc is not None:
+                raise last_exc
             return None
 
         return cast(T, wrapper)
