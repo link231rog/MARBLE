@@ -109,6 +109,9 @@ def task_config(
     ablation: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Original record + governed memory block injected (source untouched)."""
+    # ponytail: deployment pins worker via MARBLE_WORKER_MODEL env; that MUST
+    # override per-dataset llm (e.g. minecraft ships "gpt-4o-mini").
+    worker = llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL
     cfg: Dict[str, Any] = {
         "task": {"content": task.task},
         "agents": [dict(a) for a in task.agents],
@@ -121,19 +124,23 @@ def task_config(
         # ponytail: Config reads coordinate_mode (config.py), not coordination_mode
         "coordinate_mode": "graph",
         # agents fall back to config.llm; never empty (litellm rejects "").
-        # ponytail: deployment pins worker via MARBLE_WORKER_MODEL env; that MUST
-        # override per-dataset llm (e.g. minecraft ships "gpt-4o-mini").
-        "llm": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
+        "llm": worker,
         # spec §6.4: evaluator must use a fixed non-empty model, never ""
         "metrics": {
             **dict(task.metrics),
             "evaluate_llm": (
                 os.environ.get("MARBLE_EVAL_MODEL")
                 or task.metrics.get("evaluate_llm")
-                or "gpt-3.5-turbo"
+                or worker
             ),
         },
     }
+    # ponytail: JSONL agent configs may carry a per-agent llm (e.g. bargaining
+    # ships "gpt-4o"); Engine reads agent_config.get('llm', config.llm) so that
+    # field OVERRIDES our resolved worker. Force all agents to the deployment
+    # worker so a single pinned model serves the whole episode.
+    for _agent in cfg["agents"]:
+        _agent["llm"] = worker
     # ponytail: original JSONL leaves env type/max_iterations empty; fill so
     # Engine.__init__ does not raise on an unsupported empty type
     _ENV_DEFAULTS = {"coding": "Coding", "research": "Research", "database": "DB",
