@@ -63,8 +63,9 @@ def train(trace_paths: List[str], out_path: str, epochs: int = 20,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the local policy controller (SFT or RL).")
-    parser.add_argument("--mode", choices=("sft", "rl"), default="sft",
-                        help="sft: perceptron warm-up; rl: REINFORCE replay over traces")
+    parser.add_argument("--mode", choices=("sft", "rl", "sft-qwen", "rl-qwen"),
+                        default="sft",
+                        help="sft/rl: linear LocalPolicy; sft-qwen/rl-qwen: Qwen LoRA")
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--out", default="runs/local_policy.json")
     parser.add_argument("--epochs", type=int, default=20)
@@ -74,8 +75,26 @@ if __name__ == "__main__":
     parser.add_argument("--rewards", nargs="+", default=None,
                         help="summary.json paths (parallel to --traces) providing real "
                              "task_score for the RL credit loop")
+    parser.add_argument("--base-model", default="Qwen/Qwen3-4B-Instruct-2507",
+                        help="base model for Qwen LoRA training")
     args = parser.parse_args()
-    if args.mode == "rl":
+    if args.mode in ("sft-qwen", "rl-qwen"):
+        from marble.controllers import qwen_lora
+
+        if args.mode == "sft-qwen":
+            pairs = qwen_lora.export_sft_pairs(args.traces)
+            qwen_lora.train_qwen_sft(pairs, args.out, args.base_model, epochs=args.epochs)
+        else:
+            rewards = None
+            if args.rewards:
+                rewards = [
+                    float(json.load(open(rp, encoding="utf-8")).get("task_score", 0.0))
+                    for rp in args.rewards
+                ]
+            qwen_lora.train_qwen_rl(
+                args.traces, args.out, args.base_model, rewards=rewards, epochs=args.epochs
+            )
+    elif args.mode == "rl":
         from marble.controllers.rl_controller import train_rl
 
         task_scores = None
