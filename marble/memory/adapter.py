@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .governed_memory import GovernedMemory
-from .schema import MemoryCard, MemoryProposal
+from .schema import MemoryCard, MemoryProposal, classify_topics
 
 
 def make_title(output: str, max_words: int = 16) -> str:
@@ -45,6 +45,7 @@ class MemoryAwareAgentAdapter:
             title=make_title(output),
             raw_value=output,
             step_index=self._step_index,
+            topics=classify_topics(output),
         )
         item = self.memory.submit(proposal)
         return item.memory_id if item is not None else None

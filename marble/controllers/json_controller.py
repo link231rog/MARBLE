@@ -8,15 +8,14 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
+from marble.memory.schema import (
+    MemoryItem,
+    MemoryProposal,
+    MemoryTargetState,
+    TOPIC_TAXONOMY,
+)
 
 VALID_VISIBILITIES = ("absent", "private", "global")
-
-# Fixed initial topic taxonomy (schema-and-reward.md). Soft input only.
-TOPIC_TAXONOMY = (
-    "code", "research", "retrieval", "database",
-    "testing", "planning", "analysis",
-)
 
 # Input-block ablation names accepted in drop_fields.
 _BLOCK_DROPS = frozenset({
@@ -78,9 +77,10 @@ class JsonController:
             for it in current_state:
                 if not (it.active and it.task_id == proposal.task_id):
                     continue
-                summary = "" if "memory_summary" in self.drop_fields else f" | {it.title}"
+                summary = "" if "memory_summary" in self.drop_fields else f" | summary: {it.summary}"
+                topics = "" if "topics" in self.drop_fields else f" | topics: {list(it.topics)}"
                 lines.append(
-                    f"- memory_id: {it.memory_id} | title: {it.title}{summary} | "
+                    f"- memory_id: {it.memory_id} | title: {it.title}{summary}{topics} | "
                     f"visibility: {it.visibility} | owner_id: {it.owner_id}"
                 )
             lines.append(f"same_title_active: {'true' if same_title else 'false'}")
@@ -89,7 +89,7 @@ class JsonController:
 
         lines.append(
             'Respond with ONLY this JSON: {"visibility": "absent"|"private"|"global", '
-            '"supersedes": null} — replace supersedes with a listed memory_id/title '
+            '"supersedes": null} — replace supersedes with a listed memory_id '
             "only when this output updates that memory."
         )
         return "\n".join(lines)
@@ -172,6 +172,6 @@ def _resolve_supersedes(
     for it in current_state:
         if not (it.active and it.task_id == proposal.task_id):
             continue
-        if it.memory_id == supersedes or str(supersedes) == it.memory_id or it.title.strip().casefold() == wanted:
+        if it.memory_id == supersedes or str(supersedes) == it.memory_id:
             return it.memory_id
     return None

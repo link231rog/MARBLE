@@ -53,6 +53,8 @@ class MemoryBank:
                 active=True,
                 supersedes=target.supersedes,
                 created_at=self._clock,
+                summary=proposal.raw_value[:200],
+                topics=proposal.topics,
             )
             self._items[memory_id] = item
             self._proposal_to_memory[proposal.proposal_id] = memory_id
@@ -72,6 +74,8 @@ class MemoryBank:
                     active=False,
                     supersedes=old_item.supersedes,
                     created_at=old_item.created_at,
+                    summary=old_item.summary,
+                    topics=old_item.topics,
                 )
             return item
 

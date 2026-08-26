@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal, Optional
 
 
 Visibility = Literal["private", "global", "absent"]
+
+# Fixed initial topic taxonomy (schema-and-reward.md). Soft input only.
+TOPIC_TAXONOMY = (
+    "code", "research", "retrieval", "database",
+    "testing", "planning", "analysis",
+)
+
+_TOPIC_RE = {t: re.compile(rf"\b{re.escape(t)}\b", re.I) for t in TOPIC_TAXONOMY}
+
+
+def classify_topics(text: str) -> tuple:
+    """Tag text with fixed-taxonomy topics (word-boundary match)."""
+    text = text or ""
+    return tuple(t for t, rx in _TOPIC_RE.items() if rx.search(text))
 
 
 @dataclass(frozen=True)
@@ -63,6 +78,8 @@ class MemoryItem:
     active: bool
     supersedes: Optional[str]
     created_at: int
+    summary: str = ""
+    topics: tuple = ()
 
     def card(self) -> MemoryCard:
         return MemoryCard(
