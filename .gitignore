@@ -209,3 +209,6 @@ marble/workspace
 marble/logs
 marble/results
 backup/
+
+# Local experiment runs (debug noise); canonical artifacts archived under runs_archive/
+runs/
