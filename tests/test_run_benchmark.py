@@ -1,6 +1,7 @@
 import json
 
 from marble.benchmarks import load_tasks
+from marble.controllers import LocalPolicyController
 from marble.experiments.run_benchmark import (
     BASELINES,
     make_controller,
@@ -24,15 +25,13 @@ def test_make_controller_checkpoint_roundtrip(tmp_path):
     assert isinstance(ctrl, LocalPolicyController)
 
 
-def test_learned_controller_without_key_raises(monkeypatch):
+def test_learned_controller_unified_local_policy_without_key(monkeypatch):
     for var in ("OPENAI_API_KEY", "NVAPI_KEY", "MARBLE_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    try:
-        make_controller("learned_controller")
-        raised = False
-    except RuntimeError as exc:
-        raised = "NVAPI_KEY" in str(exc)
-    assert raised
+    # review #3: learned_controller is unified to LocalPolicyController (no API
+    # key needed); untrained -> absent. No RuntimeError expected here.
+    ctrl = make_controller("learned_controller")
+    assert isinstance(ctrl, LocalPolicyController)
 
 
 def test_task_config_injects_governed_block_only_when_needed():
@@ -45,7 +44,11 @@ def test_task_config_injects_governed_block_only_when_needed():
     assert gov["memory"]["max_cards"] == 3
     assert gov["memory"]["max_reads_per_step"] == 1
     assert gov["task"]["content"] == t.task
-    assert gov["agents"] == [dict(a) for a in t.agents]
+    # worker-precedence: task_config forces llm on every agent; original fields kept
+    assert len(gov["agents"]) == len(t.agents)
+    for orig, injected in zip(t.agents, gov["agents"]):
+        assert {k: v for k, v in injected.items() if k != "llm"} == dict(orig)
+        assert injected["llm"]
 
 
 def test_task_config_overrides_empty_env_type():

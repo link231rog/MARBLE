@@ -20,7 +20,6 @@ from marble.controllers import (
     AbsentController,
     GlobalAlwaysController,
     HeuristicController,
-    JsonController,
     LocalPolicyController,
     PrivateOnlyController,
 )
@@ -60,23 +59,15 @@ def make_controller(
     elif baseline == "heuristic":
         controller = HeuristicController()
     elif baseline == "learned_controller":
-        if controller_checkpoint:
-            controller = LocalPolicyController.load(controller_checkpoint)
-        else:
-            from marble.experiments.coding_rollout import NvidiaLLM
-
-            llm = NvidiaLLM()  # raises RuntimeError when NVAPI_KEY missing
-            kwargs: Dict[str, Any] = {}
-            if ablation:
-                factor, option = parse_ablation(ablation)
-                kwargs.update(controller_kwargs(factor, option))
-            controller = JsonController(
-                lambda p: llm.act(
-                    "You are a strict memory-governance controller. Output ONLY the JSON decision.",
-                    p,
-                ),
-                **kwargs,
-            )
+        # unified learned controller: LocalPolicyController (linear policy).
+        # Untrained (no checkpoint) -> argmax over zero weights -> absent.
+        # With checkpoint -> loaded policy. Same component in Stage B and Stage E
+        # so the two are comparable (review: was JsonController vs LocalPolicy).
+        controller = (
+            LocalPolicyController.load(controller_checkpoint)
+            if controller_checkpoint
+            else LocalPolicyController()
+        )
     else:
         raise ValueError(f"unknown baseline {baseline!r}; choose from {BASELINES}")
     if ablation:
@@ -247,7 +238,7 @@ def run_task(
         "worker_model": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
         "controller_model": (
             baseline if baseline != "learned_controller"
-            else os.environ.get("NVAPI_MODEL") or "learned_controller(nvidia)"
+            else "learned_controller(local_policy)"
         ),
         "evaluator_model": os.environ.get("MARBLE_EVAL_MODEL", "") or cfg["metrics"].get("evaluate_llm", ""),
     }

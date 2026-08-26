@@ -25,16 +25,28 @@ def test_valid_global_decision():
     assert ctrl.rejections == []
 
 
-def test_private_supersedes_resolved_by_title():
+def test_private_supersedes_resolved_by_memory_id():
     bank = MemoryBank()
     mem = GovernedMemory(bank, JsonController(_llm({"visibility": "private", "supersedes": None})))
     first = mem.submit(_proposal("p1"))
     assert first is not None
-    ctrl = JsonController(_llm({"visibility": "private", "supersedes": "shared result"}))
+    # review P2: supersedes resolves by exact memory_id only, not by title
+    ctrl = JsonController(_llm({"visibility": "private", "supersedes": first.memory_id}))
     items = [it for it in bank.all_items() if it.active]
     target = ctrl.decide(_proposal("p2"), items)
     assert target.supersedes == first.memory_id
     assert target.owner_id == "coder"
+
+
+def test_supersedes_by_title_is_rejected():
+    bank = MemoryBank()
+    mem = GovernedMemory(bank, JsonController(_llm({"visibility": "private", "supersedes": None})))
+    mem.submit(_proposal("p1", title="shared result"))
+    ctrl = JsonController(_llm({"visibility": "private", "supersedes": "shared result"}))
+    items = [it for it in bank.all_items() if it.active]
+    target = ctrl.decide(_proposal("p2"), items)
+    assert target.visibility == "absent"  # title no longer resolves
+    assert "not found" in ctrl.rejections[-1]["reason"]
 
 
 def test_invalid_json_rejected_and_recorded():
