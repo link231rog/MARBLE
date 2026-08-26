@@ -72,6 +72,8 @@ def train_rl(
     epochs: int = 5,
     lr: float = 0.05,
     r_episode: float = 1.0,
+    task_scores: List[float] | None = None,
+    same_task_baseline: float = 0.0,
 ) -> Dict[str, Any]:
     controller = (
         LocalPolicyController.load(init_checkpoint)
@@ -83,15 +85,19 @@ def train_rl(
 
     episodes = 0
     steps = 0
-    for path in trace_paths:
+    for i, path in enumerate(trace_paths):
         with open(path, encoding="utf-8") as fh:
             events = [json.loads(line) for line in fh if line.strip()]
         decisions = [e for e in events if e.get("event") == "memory_decision"]
         if not decisions:
             continue
         episodes += 1
-        # ponytail: running-baseline omitted — single-method offline replay only
-        credits = proposal_rewards(events, task_score=r_episode)
+        # real reward loop: prefer per-episode task_score (from run summary) over
+        # the fixed offline placeholder; center advantages on the split mean.
+        ts = task_scores[i] if task_scores else r_episode
+        credits = proposal_rewards(
+            events, task_score=ts, same_task_baseline=same_task_baseline
+        )
         for _ in range(epochs):
             steps += trainer.update_trace(events, credits)
     controller.save(out_path)

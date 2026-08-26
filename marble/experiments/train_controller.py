@@ -70,12 +70,24 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--init", default=None, help="SFT checkpoint to start RL from")
     parser.add_argument("--r-episode", type=float, default=1.0,
-                        help="episode reward used for RL credit (offline replay)")
+                        help="fallback episode reward when --rewards is omitted")
+    parser.add_argument("--rewards", nargs="+", default=None,
+                        help="summary.json paths (parallel to --traces) providing real "
+                             "task_score for the RL credit loop")
     args = parser.parse_args()
     if args.mode == "rl":
         from marble.controllers.rl_controller import train_rl
 
+        task_scores = None
+        baseline = 0.0
+        if args.rewards:
+            task_scores = []
+            for rp in args.rewards:
+                with open(rp, encoding="utf-8") as fh:
+                    task_scores.append(float(json.load(fh).get("task_score", 0.0)))
+            baseline = sum(task_scores) / len(task_scores) if task_scores else 0.0
         train_rl(args.traces, args.out, init_checkpoint=args.init,
-                 epochs=args.epochs, lr=0.05, r_episode=args.r_episode)
+                 epochs=args.epochs, lr=0.05, r_episode=args.r_episode,
+                 task_scores=task_scores, same_task_baseline=baseline)
     else:
         train(args.traces, args.out, epochs=args.epochs)

@@ -55,3 +55,14 @@ def test_train_rl_roundtrip(tmp_path):
     assert stats["episodes"] == 1 and stats["updates"] > 0
     reloaded = LocalPolicyController.load(str(out))
     assert isinstance(reloaded, LocalPolicyController)
+
+
+def test_train_rl_uses_real_task_scores(tmp_path):
+    t1 = _trace(tmp_path, "t1.jsonl")
+    t2 = _trace(tmp_path, "t2.jsonl")
+    out = tmp_path / "policy_rl2.json"
+    # real reward loop: per-episode task_score + split mean baseline
+    stats = train_rl([t1, t2], str(out), epochs=2,
+                     task_scores=[0.0, 1.0], same_task_baseline=0.5)
+    assert stats["episodes"] == 2 and stats["updates"] > 0
+    assert LocalPolicyController.load(str(out)) is not None
