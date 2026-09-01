@@ -10,7 +10,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from marble.memory.adapter import make_title
 from marble.memory.governed_memory import GovernedMemory
-from marble.memory.schema import MemoryProposal
+from marble.memory.rewards import token_count
+from marble.memory.schema import MemoryProposal, classify_topics
 
 
 class MemoryStep:
@@ -23,6 +24,8 @@ class MemoryStep:
         max_cards: int = 6,
         max_reads_per_step: int = 2,
         selector: str = "callable",
+        task_goal: str = "",
+        agent_role_map: Optional[Dict[str, str]] = None,
     ):
         self.memory = memory
         # selector: "callable" (use selector_fn) or "top" (rank-order, no API)
@@ -34,24 +37,37 @@ class MemoryStep:
         self.steps: Dict[str, int] = {}
         self.reads_this_episode = 0
         self.selection_rejections: List[Dict[str, Any]] = []
+        self.task_goal = task_goal
+        self.agent_role_map = dict(agent_role_map or {})
+        self._context_by_agent: Dict[str, Dict[str, int]] = {}
 
     # ------------------------------------------------------------------ before
     def before_act(self, agent_id: str, task_text: str) -> str:
         self.steps[agent_id] = self.steps.get(agent_id, 0) + 1
         if self.memory is None:
             return task_text
+        controller = getattr(self.memory, "controller", None)
+        if controller is not None and hasattr(controller, "set_context"):
+            controller.set_context(self.task_goal, self.agent_role_map)
         cards = self.memory.visible_keys(
             reader_id=agent_id, task_id=self.task_id, query=task_text, top_k=self.max_cards
         )
-        parts = [task_text]
+        key_lines: List[str] = []
+        notes: List[str] = []
         if cards:
-            parts.append("Shared memory keys:")
-            parts += [f"- {c.memory_id} | {c.title} | {c.visibility} | owner={c.owner_id}" for c in cards]
+            key_lines = [
+                "Shared memory keys:",
+                *[f"- {c.memory_id} | {c.title} | {c.visibility} | owner={c.owner_id}" for c in cards],
+            ]
             notes = self._read_selected(agent_id, cards)
-            if notes:
-                parts.append("Read notes:")
-                parts += notes
-        return "\n".join(parts)
+        note_lines = ["Read notes:", *notes] if notes else []
+        parts = [task_text, *key_lines, *note_lines]
+        augmented = "\n".join(parts)
+        self._context_by_agent[agent_id] = {
+            "memory_card_tokens": token_count("\n".join(key_lines)),
+            "injected_memory_tokens": token_count("\n".join(notes)),
+        }
+        return augmented
 
     def _read_selected(self, agent_id: str, cards) -> List[str]:
         assert self.memory is not None  # only called from before_act after the None guard
@@ -93,6 +109,9 @@ class MemoryStep:
     def after_act(self, agent_id: str, output: str) -> Optional[str]:
         if self.memory is None or not output.strip():
             return None
+        controller = getattr(self.memory, "controller", None)
+        if controller is not None and hasattr(controller, "set_context"):
+            controller.set_context(self.task_goal, self.agent_role_map)
         proposal = MemoryProposal(
             proposal_id=f"{self.task_id}:{agent_id}:{self.steps.get(agent_id, 0)}",
             task_id=self.task_id,
@@ -101,8 +120,19 @@ class MemoryStep:
             title=make_title(output),
             raw_value=output,
             step_index=self.steps.get(agent_id, 0),
+            topics=classify_topics(output),
         )
-        item = self.memory.submit(proposal)
+        metadata: Dict[str, Any] = dict(self._context_by_agent.get(agent_id, {}))
+        if controller is not None:
+            metadata.update({
+                "controller_prompt": getattr(controller, "last_prompt", ""),
+                "controller_output": getattr(controller, "last_raw", ""),
+                "active_memory_index": [
+                    it.__dict__ for it in self.memory.bank.all_items()
+                    if it.active and it.task_id == proposal.task_id
+                ],
+            })
+        item = self.memory.submit(proposal, **metadata)
         return item.memory_id if item is not None else None
 
 

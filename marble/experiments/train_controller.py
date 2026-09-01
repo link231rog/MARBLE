@@ -62,10 +62,11 @@ def train(trace_paths: List[str], out_path: str, epochs: int = 20,
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train the local policy controller (SFT or RL).")
-    parser.add_argument("--mode", choices=("sft", "rl", "sft-qwen", "rl-qwen"),
+    parser = argparse.ArgumentParser(description="Train a controller from decision traces.")
+    parser.add_argument("--mode", choices=("sft", "rl", "qwen_sft", "qwen_rl", "sft-qwen", "rl-qwen"),
                         default="sft",
-                        help="sft/rl: linear LocalPolicy; sft-qwen/rl-qwen: Qwen LoRA")
+                        help="sft/rl: linear LocalPolicy; qwen_sft: LoRA SFT; "
+                             "qwen_rl: trace-replay completion-level REINFORCE")
     parser.add_argument("--traces", nargs="+", required=True)
     parser.add_argument("--out", default="runs/local_policy.json")
     parser.add_argument("--epochs", type=int, default=20)
@@ -78,21 +79,22 @@ if __name__ == "__main__":
     parser.add_argument("--base-model", default="Qwen/Qwen3-4B-Instruct-2507",
                         help="base model for Qwen LoRA training")
     args = parser.parse_args()
-    if args.mode in ("sft-qwen", "rl-qwen"):
+    if args.mode in ("qwen_sft", "qwen_rl", "sft-qwen", "rl-qwen"):
         from marble.controllers import qwen_lora
 
-        if args.mode == "sft-qwen":
+        if args.mode in ("qwen_sft", "sft-qwen"):
             pairs = qwen_lora.export_sft_pairs(args.traces)
             qwen_lora.train_qwen_sft(pairs, args.out, args.base_model, epochs=args.epochs)
         else:
-            rewards = None
-            if args.rewards:
-                rewards = [
-                    float(json.load(open(rp, encoding="utf-8")).get("task_score", 0.0))
-                    for rp in args.rewards
-                ]
+            if not args.rewards:
+                parser.error("--rewards is required for qwen_rl")
+            rewards = [
+                float(json.load(open(reward_path, encoding="utf-8")).get("task_score", 0.0))
+                for reward_path in args.rewards
+            ]
             qwen_lora.train_qwen_rl(
-                args.traces, args.out, args.base_model, rewards=rewards, epochs=args.epochs
+                args.traces, args.out, args.base_model, rewards=rewards,
+                epochs=args.epochs, init_checkpoint=args.init,
             )
     elif args.mode == "rl":
         from marble.controllers.rl_controller import train_rl

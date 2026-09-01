@@ -1,8 +1,15 @@
+import json
 from pathlib import Path
 
 import pytest
 
-from marble.memory import MemoryBank, MemoryProposal, MemoryTargetState, TraceLogger
+from marble.memory import (
+    GovernedMemory,
+    MemoryBank,
+    MemoryProposal,
+    MemoryTargetState,
+    TraceLogger,
+)
 
 
 def proposal(
@@ -89,3 +96,33 @@ def test_trace_logger_writes_jsonl(tmp_path: Path) -> None:
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3
     assert '"event": "memory_read"' in lines[-1]
+
+
+def test_submit_logs_current_controller_decision_context(tmp_path: Path) -> None:
+    class Controller:
+        def decide(self, item, current_state):
+            self.last_prompt = f"prompt:{item.proposal_id}"
+            self.last_raw = f"raw:{item.proposal_id}"
+            return MemoryTargetState(True, "global")
+
+    path = tmp_path / "events.jsonl"
+    memory = GovernedMemory(
+        MemoryBank(),
+        Controller(),
+        trace=TraceLogger(str(path)),
+    )
+    memory.submit(proposal("p1"), controller_prompt="stale", controller_output="stale")
+    memory.submit(proposal("p2"), controller_prompt="stale", controller_output="stale")
+
+    decisions = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line)["event"] == "memory_decision"
+    ]
+
+    assert decisions[0]["controller_prompt"] == "prompt:p1"
+    assert decisions[0]["controller_output"] == "raw:p1"
+    assert decisions[0]["active_memory_index"] == []
+    assert decisions[1]["controller_prompt"] == "prompt:p2"
+    assert decisions[1]["controller_output"] == "raw:p2"
+    assert [item["memory_id"] for item in decisions[1]["active_memory_index"]] == ["p1"]

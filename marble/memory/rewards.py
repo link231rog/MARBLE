@@ -30,13 +30,27 @@ class EpisodeStats:
     communication_tokens: int = 0
     token_budget: int = _TOKEN_BUDGET
 
+    @property
+    def memory_cost(self) -> float:
+        budget = max(self.token_budget, 1)
+        return (
+            self.read_tokens + self.active_global_tokens + self.communication_tokens
+        ) / budget
+
 
 def episode_reward(stats: EpisodeStats) -> float:
-    budget = max(stats.token_budget, 1)
-    memory_cost = (
-        stats.read_tokens + stats.active_global_tokens + stats.communication_tokens
-    ) / budget
-    return stats.task_score - LAMBDA * memory_cost
+    return stats.task_score - LAMBDA * stats.memory_cost
+
+
+def measured_memory_cost(events: List[Dict[str, Any]], token_budget: int = _TOKEN_BUDGET) -> float:
+    """Return variable memory-context tokens from one episode trace."""
+    total = 0
+    for event in events:
+        if event.get("event") != "memory_decision":
+            continue
+        total += int(event.get("memory_card_tokens", 0) or 0)
+        total += int(event.get("injected_memory_tokens", 0) or 0)
+    return total / max(token_budget, 1)
 
 
 def proposal_rewards(
@@ -63,7 +77,7 @@ def proposal_rewards(
         proposal = ev["proposal"]
         stored[mid] = {
             "owner": proposal["agent_id"],
-            "tokens": token_count(proposal.get("raw_value", "")),
+            "tokens": float(ev.get("memory_cost_tokens", token_count(proposal.get("raw_value", "")))),
         }
     readers: Dict[str, List[str]] = {}
     for ev in events:
@@ -80,5 +94,7 @@ def proposal_rewards(
             continue
         non_owner = any(r != info["owner"] for r in readers[mid])
         mult = 1 + b * (1 if non_owner else 0)
+        # A memory receives at most one reuse credit; repeated reads only affect
+        # the diagnostic trace, never the training signal.
         credits[mid] = advantage * mult - lam * cost
     return credits

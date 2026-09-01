@@ -33,7 +33,15 @@ from marble.experiments.ablations import (
 from marble.experiments.engine_bridge import MemoryStep, build_governed_engine_cls
 from marble.memory import GovernedMemory, MemoryBank, TraceLogger
 
-BASELINES = ("no_memory", "global_always", "private_only", "heuristic", "learned_controller")
+BASELINES = (
+    "no_memory",
+    "global_always",
+    "private_only",
+    "heuristic",
+    "learned_controller",
+    "qwen_sft",
+    "qwen_rl",
+)
 
 # ponytail: dataset llm is often ""; workers run through litellm, so a missing
 # model string must not reach BaseAgent as "". Fall back to an env-overridable
@@ -48,6 +56,12 @@ def make_controller(
     baseline: str,
     controller_checkpoint: Optional[str] = None,
     ablation: Optional[str] = None,
+    *,
+    qwen_base_model: Optional[str] = None,
+    qwen_api_base: Optional[str] = None,
+    qwen_api_key: Optional[str] = None,
+    qwen_api_model: Optional[str] = None,
+    qwen_temperature: float = 0.0,
 ) -> Any:
     controller: Any = None
     if baseline == "no_memory":
@@ -68,6 +82,48 @@ def make_controller(
             if controller_checkpoint
             else LocalPolicyController()
         )
+    elif baseline in ("qwen_sft", "qwen_rl"):
+        from marble.controllers.qwen_lora import (
+            api_generate_fn,
+            local_generate_fn,
+            make_qwen_lora_controller,
+        )
+
+        base_model = (
+            qwen_base_model
+            or os.environ.get("MARBLE_QWEN_BASE_MODEL")
+            or "Qwen/Qwen3-4B-Instruct-2507"
+        )
+        api_base = qwen_api_base or os.environ.get("MARBLE_QWEN_API_BASE")
+        if api_base:
+            api_key = (
+                qwen_api_key
+                or os.environ.get("MARBLE_QWEN_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or os.environ.get("NVAPI_KEY")
+                or os.environ.get("MARBLE_API_KEY")
+            )
+            if not api_key:
+                raise RuntimeError(
+                    "Qwen endpoint mode needs --qwen-api-key or MARBLE_QWEN_API_KEY"
+                )
+            generate_fn = api_generate_fn(
+                api_base,
+                api_key,
+                qwen_api_model
+                or os.environ.get("MARBLE_QWEN_API_MODEL")
+                or base_model,
+            )
+        else:
+            if not controller_checkpoint:
+                raise ValueError(
+                    f"{baseline} local runtime needs --controller-checkpoint "
+                    "pointing to a LoRA adapter, or --qwen-api-base"
+                )
+            generate_fn = local_generate_fn(
+                base_model, controller_checkpoint, temperature=qwen_temperature
+            )
+        controller = make_qwen_lora_controller(generate_fn)
     else:
         raise ValueError(f"unknown baseline {baseline!r}; choose from {BASELINES}")
     if ablation:
@@ -81,10 +137,16 @@ def make_governed(
     trace_path: str | Path,
     controller_checkpoint: Optional[str] = None,
     ablation: Optional[str] = None,
+    **qwen_runtime: Optional[str],
 ) -> GovernedMemory:
     return GovernedMemory(
         MemoryBank(),
-        make_controller(baseline, controller_checkpoint, ablation),
+        make_controller(
+            baseline,
+            controller_checkpoint,
+            ablation,
+            **qwen_runtime,
+        ),
         trace=TraceLogger(str(trace_path)),
     )
 
@@ -200,6 +262,11 @@ def run_task(
     llm: str = "",
     ablation: Optional[str] = None,
     controller_checkpoint: Optional[str] = None,
+    qwen_base_model: Optional[str] = None,
+    qwen_api_base: Optional[str] = None,
+    qwen_api_key: Optional[str] = None,
+    qwen_api_model: Optional[str] = None,
+    qwen_temperature: float = 0.0,
 ) -> Dict[str, Any]:
     if seed is not None:
         random.seed(seed)
@@ -237,8 +304,18 @@ def run_task(
         # spec §11.2/§11.3: record the exact models used, all non-empty
         "worker_model": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
         "controller_model": (
-            baseline if baseline != "learned_controller"
-            else "learned_controller(local_policy)"
+            "learned_controller(local_policy)"
+            if baseline == "learned_controller"
+            else (
+                (
+                    "qwen_rl(policy_gradient;"
+                    f"{qwen_api_model or qwen_base_model or os.environ.get('MARBLE_QWEN_BASE_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'})"
+                    if baseline == "qwen_rl"
+                    else f"qwen_sft({qwen_api_model or qwen_base_model or os.environ.get('MARBLE_QWEN_BASE_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'})"
+                )
+                if baseline in ("qwen_sft", "qwen_rl")
+                else baseline
+            )
         ),
         "evaluator_model": os.environ.get("MARBLE_EVAL_MODEL", "") or cfg["metrics"].get("evaluate_llm", ""),
     }
@@ -266,6 +343,11 @@ def run_task(
             llm=llm,
             ablation=ablation,
             retriever=retriever,
+            qwen_base_model=qwen_base_model,
+            qwen_api_base=qwen_api_base,
+            qwen_api_key=qwen_api_key,
+            qwen_api_model=qwen_api_model,
+            qwen_temperature=qwen_temperature,
         )
         summary.update(metrics)
         # spec §10: empty evaluator score -> mark, do not fake a zero
@@ -304,6 +386,11 @@ def _run_real_episode(
     llm: str = "",
     ablation: Optional[str] = None,
     retriever: str = "key_first",
+    qwen_base_model: Optional[str] = None,
+    qwen_api_base: Optional[str] = None,
+    qwen_api_key: Optional[str] = None,
+    qwen_api_model: Optional[str] = None,
+    qwen_temperature: float = 0.0,
 ) -> Dict[str, Any]:
     _require_worker_key()
     import os
@@ -317,15 +404,29 @@ def _run_real_episode(
         str((tdir / "memory_trace.jsonl").resolve()),
         controller_checkpoint,
         ablation,
+        qwen_base_model=qwen_base_model,
+        qwen_api_base=qwen_api_base,
+        qwen_api_key=qwen_api_key,
+        qwen_api_model=qwen_api_model,
+        qwen_temperature=qwen_temperature,
     )
     # ponytail: selector "top" makes agents read the top-ranked cards without an
     # extra API call, so memory actually influences the task
     if retriever not in ("key_first", "none"):
         print(f"[warn] retrieval {retriever!r} not implemented; using key_first")
     eff_max_cards = 0 if retriever == "none" else max_cards
+    agent_role_map = {
+        str(agent["agent_id"]): " | ".join(
+            str(agent.get(field, "")).strip()
+            for field in ("type", "profile")
+            if str(agent.get(field, "")).strip()
+        )
+        for agent in task.agents
+        if agent.get("agent_id")
+    }
     harness = MemoryStep(
         mem, max_cards=eff_max_cards, max_reads_per_step=max_reads_per_step,
-        selector="top",
+        selector="top", task_goal=task.task, agent_role_map=agent_role_map,
     )
     harness.task_id = str(task.task_id)
 
@@ -475,6 +576,28 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--retrieval", default="key_first")
     ap.add_argument("--max-reads-per-step", type=int, default=2)
     ap.add_argument("--controller-checkpoint", default=None)
+    ap.add_argument(
+        "--qwen-base-model",
+        default=None,
+        help="base model path/name for qwen_sft/qwen_rl local adapter loading",
+    )
+    ap.add_argument(
+        "--qwen-api-base",
+        default=None,
+        help="OpenAI-compatible endpoint for qwen_sft/qwen_rl; skips local loading",
+    )
+    ap.add_argument("--qwen-api-key", default=None, help="key for --qwen-api-base")
+    ap.add_argument(
+        "--qwen-api-model",
+        default=None,
+        help="served adapter model name for --qwen-api-base",
+    )
+    ap.add_argument(
+        "--qwen-temperature",
+        type=float,
+        default=0.0,
+        help="controller sampling temperature; use >0 for RL rollout collection",
+    )
     ap.add_argument("--worker-model", default=None, help="litellm model string for workers")
     ap.add_argument("--ablation", default=None, help="factor:option, e.g. retrieval:none")
     ap.add_argument("--dry-run", action="store_true")
@@ -521,6 +644,11 @@ def main(argv: Optional[List[str]] = None) -> None:
             llm=args.worker_model or "",
             ablation=args.ablation,
             controller_checkpoint=args.controller_checkpoint,
+            qwen_base_model=args.qwen_base_model,
+            qwen_api_base=args.qwen_api_base,
+            qwen_api_key=args.qwen_api_key,
+            qwen_api_model=args.qwen_api_model,
+            qwen_temperature=args.qwen_temperature,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 

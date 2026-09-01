@@ -13,7 +13,7 @@ class _NullTrace:
         pass
 
     def log_decision(self, proposal: object, target: object,
-                     memory_id: Optional[str] = None) -> None:
+                     memory_id: Optional[str] = None, **metadata: object) -> None:
         pass
 
     def log_read(self, memory_id: str, reader_id: str, task_id: str) -> None:
@@ -35,17 +35,29 @@ class GovernedMemory:
         self.retriever = retriever or KeyRetriever()
         self.trace = trace if trace is not None else _NullTrace()
 
-    def submit(self, proposal: MemoryProposal) -> Optional[MemoryItem]:
+    def submit(self, proposal: MemoryProposal, **metadata) -> Optional[MemoryItem]:
         self.trace.log_proposal(proposal)
         current_state: Sequence[MemoryItem] = [
             item
             for item in self.bank.all_items()
             if item.task_id == proposal.task_id and item.active
         ]
+        metadata.pop("controller_prompt", None)
+        metadata.pop("controller_output", None)
+        metadata["active_memory_index"] = [
+            item.__dict__.copy() for item in current_state
+        ]
         target = self.controller.decide(proposal, current_state)
+        prompt = getattr(self.controller, "last_prompt", None)
+        raw = getattr(self.controller, "last_raw", None)
+        if prompt is not None:
+            metadata["controller_prompt"] = prompt
+        if raw is not None:
+            metadata["controller_output"] = raw
         item = self.bank.apply(proposal, target)
         self.trace.log_decision(proposal, target,
-                                memory_id=item.memory_id if item else None)
+                                memory_id=item.memory_id if item else None,
+                                **metadata)
         return item
 
     def visible_keys(

@@ -18,7 +18,6 @@ SCHEMA_FIELDS = ("title", "value", "source", "agent_id", "task_id", "step_index"
 
 # Input-block ablation -> JsonController drop_fields (schema-and-reward.md §Input ablations)
 INPUT_ABLATIONS = {
-    "no_agent_tags": ("agent_capabilities",),
     "no_topic_tags": ("topics",),
     "no_memory_summary": ("memory_summary",),
     "no_active_memory_index": ("active_memory_index",),

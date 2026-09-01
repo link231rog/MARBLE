@@ -6,6 +6,7 @@ from marble.experiments.engine_bridge import (
     build_governed_agent_cls,
     build_governed_engine_cls,
 )
+from marble.memory.rewards import token_count
 from marble.memory import GovernedMemory, MemoryBank, TraceLogger
 
 
@@ -54,6 +55,24 @@ def test_before_act_lists_keys_and_reads_selected(tmp_path):
     assert step.reads_this_episode == 1
     events = _events(tp)
     assert any(e["event"] == "memory_read" and e["reader_id"] == "coder" for e in events)
+
+
+def test_before_act_counts_key_cards_and_notes_separately(tmp_path):
+    mem, _ = _memory(tmp_path)
+    item = _store_global(mem, title="shared key", value="read this note")
+    step = MemoryStep(mem, selector_fn=lambda p: json.dumps({"memory_ids": [item.memory_id]}))
+    step.task_id = "t"
+
+    step.before_act("coder", "task")
+
+    context = step._context_by_agent["coder"]
+    key_text = (
+        "Shared memory keys:\n"
+        f"- {item.memory_id} | {item.title} | {item.visibility} | owner={item.owner_id}"
+    )
+    notes_text = f"- [{item.memory_id}] read this note"
+    assert context["memory_card_tokens"] == token_count(key_text)
+    assert context["injected_memory_tokens"] == token_count(notes_text)
 
 
 def test_selector_cap_and_unknown_ids_skipped(tmp_path):

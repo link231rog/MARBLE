@@ -76,22 +76,26 @@ def test_unknown_supersedes_target_rejected():
     assert "not found" in ctrl.rejections[0]["reason"]
 
 
-def test_prompt_follows_four_block_contract():
+def test_prompt_follows_frozen_system_and_three_block_contract():
     seen = {}
     def llm(prompt):
         seen["prompt"] = prompt
         return '{"visibility": "global", "supersedes": null}'
-    ctrl = JsonController(llm, max_value_chars=20,
-                          agent_capabilities=("coding",), task_goal="solve fizzbuzz")
+    ctrl = JsonController(
+        llm,
+        max_value_chars=20,
+        agent_role_map={"coder": "coding"},
+        task_goal="solve fizzbuzz",
+    )
     ctrl.decide(_proposal(value="x" * 100), [])
     p = seen["prompt"]
-    # four frozen input blocks present
-    for block in ("[TASK]", "[AGENT]", "[PROPOSAL]", "[ACTIVE MEMORY INDEX]"):
+    for block in ("[SYSTEM]", "[TASK]", "[PROPOSAL]", "[ACTIVE MEMORY INDEX]"):
         assert block in p
     assert "task_goal: solve fizzbuzz" in p
-    assert "agent_capabilities: ['coding']" in p
+    assert 'agent_role_map: {"coder": "coding"}' in p
+    assert "agent_reference: coder" in p
     # contract-excluded fields must NOT leak into the prompt
-    for forbidden in ("task_id:", "step_index:", "proposal_id:", "agent_id:"):
+    for forbidden in ("task_id:", "step_index:", "proposal_id:", "agent_capabilities:"):
         assert forbidden not in p
     # value truncation honored
     assert len(p.split("value: ", 1)[1].split("\n")[0]) <= 20

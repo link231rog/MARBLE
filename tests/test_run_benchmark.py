@@ -2,6 +2,7 @@ import json
 
 from marble.benchmarks import load_tasks
 from marble.controllers import LocalPolicyController
+from marble.controllers import qwen_lora
 from marble.experiments.run_benchmark import (
     BASELINES,
     make_controller,
@@ -9,6 +10,7 @@ from marble.experiments.run_benchmark import (
     run_task,
     task_config,
 )
+from marble.memory.schema import MemoryProposal
 
 
 def _task():
@@ -32,6 +34,57 @@ def test_learned_controller_unified_local_policy_without_key(monkeypatch):
     # key needed); untrained -> absent. No RuntimeError expected here.
     ctrl = make_controller("learned_controller")
     assert isinstance(ctrl, LocalPolicyController)
+
+
+def test_qwen_local_mode_loads_adapter_without_overloading_learned_controller(monkeypatch):
+    seen = {}
+
+    def fake_local(base_model, lora_dir, temperature=0.0):
+        seen["base_model"] = base_model
+        seen["lora_dir"] = lora_dir
+        seen["temperature"] = temperature
+        return lambda prompt: '{"visibility":"private","supersedes":null}'
+
+    monkeypatch.setattr(qwen_lora, "local_generate_fn", fake_local)
+    ctrl = make_controller(
+        "qwen_sft",
+        controller_checkpoint="/adapters/sft",
+        qwen_base_model="/models/qwen",
+    )
+    assert seen == {
+        "base_model": "/models/qwen",
+        "lora_dir": "/adapters/sft",
+        "temperature": 0.0,
+    }
+    assert ctrl.decide(
+        MemoryProposal(
+            proposal_id="p", task_id="t", agent_id="a", source="worker",
+            title="x", raw_value="y", step_index=0,
+        ),
+        [],
+    ).visibility == "private"
+
+
+def test_qwen_endpoint_mode_uses_explicit_served_model(monkeypatch):
+    seen = {}
+
+    def fake_api(api_base, api_key, model):
+        seen.update(api_base=api_base, api_key=api_key, model=model)
+        return lambda prompt: '{"visibility":"global","supersedes":null}'
+
+    monkeypatch.setattr(qwen_lora, "api_generate_fn", fake_api)
+    ctrl = make_controller(
+        "qwen_rl",
+        qwen_api_base="https://controller.example/v1",
+        qwen_api_key="test-key",
+        qwen_api_model="qwen-controller-rl",
+    )
+    assert seen == {
+        "api_base": "https://controller.example/v1",
+        "api_key": "test-key",
+        "model": "qwen-controller-rl",
+    }
+    assert ctrl is not None
 
 
 def test_task_config_injects_governed_block_only_when_needed():

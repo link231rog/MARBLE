@@ -26,7 +26,8 @@ class TraceLogger:
         self.log("memory_proposal", proposal=proposal.__dict__)
 
     def log_decision(self, proposal: Any, target: Any,
-                     memory_id: Optional[str] = None) -> None:
+                     memory_id: Optional[str] = None,
+                     **metadata: Any) -> None:
         record: Dict[str, Any] = {
             "event": "memory_decision",
             "proposal": proposal.__dict__,
@@ -34,6 +35,7 @@ class TraceLogger:
         }
         if memory_id is not None:
             record["memory_id"] = memory_id
+        record.update(metadata)
         self.log_record(record)
 
     def log_read(self, memory_id: str, reader_id: str, task_id: str) -> None:

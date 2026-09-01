@@ -6,7 +6,7 @@ coerced into a valid guess.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from marble.memory.schema import (
     MemoryItem,
@@ -17,18 +17,15 @@ from marble.memory.schema import (
 
 VALID_VISIBILITIES = ("absent", "private", "global")
 
-# Input-block ablation names accepted in drop_fields.
-_BLOCK_DROPS = frozenset({
-    "agent_capabilities", "topics", "memory_summary", "active_memory_index",
-})
+# Dynamic input-field ablations accepted in drop_fields.
+_BLOCK_DROPS = frozenset({"topics", "memory_summary", "active_memory_index"})
 
 
 class JsonController:
     """decide() via llm_fn(prompt) -> str; strict-JSON contract enforced here.
 
-    Prompt follows the four frozen input blocks (TASK/AGENT/PROPOSAL/ACTIVE
-    MEMORY INDEX). Excluded by contract: task_id, proposal_id, agent identity,
-    step/subgoal, outcome, and other agents' private content.
+    Prompt follows fixed system context plus TASK/PROPOSAL/ACTIVE MEMORY INDEX.
+    Agent roles remain static; only agent_reference appears in dynamic input.
     """
 
     def __init__(
@@ -38,30 +35,48 @@ class JsonController:
         drop_fields: tuple = (),
         agent_capabilities: tuple = (),
         task_goal: str = "",
+        agent_role_map: Optional[Mapping[str, str]] = None,
     ):
         self.llm_fn = llm_fn
         self.max_value_chars = max_value_chars
         self.drop_fields = frozenset(drop_fields)
-        self.agent_capabilities = tuple(agent_capabilities)
+        self.agent_role_map = dict(agent_role_map or {
+            str(index): value for index, value in enumerate(agent_capabilities)
+        })
         self.task_goal = task_goal
         self.rejections: List[Dict[str, Any]] = []
+        self.last_prompt = ""
+        self.last_raw = ""
+
+    def set_context(
+        self,
+        task_goal: str = "",
+        agent_role_map: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        """Update per-episode prompt context without changing the output contract."""
+        self.task_goal = task_goal
+        if agent_role_map is not None:
+            self.agent_role_map = dict(agent_role_map)
 
     # ------------------------------------------------------------------ prompt
     def build_prompt(self, proposal: MemoryProposal, current_state: Sequence[MemoryItem]) -> str:
         same_title = _find_same_title(proposal, current_state)
-        lines: List[str] = []
+        lines: List[str] = [
+            "[SYSTEM]",
+            f"agent_role_map: {json.dumps(self.agent_role_map, ensure_ascii=False, sort_keys=True)}",
+            f"topic_taxonomy: {list(TOPIC_TAXONOMY)}",
+            "visibility: absent removes memory; private exposes only to owner; global exposes to all agents.",
+            "supersedes: use an exact active memory_id only when replacing that memory.",
+            'output: ONLY {"visibility": "absent"|"private"|"global", "supersedes": null}.',
+        ]
 
         # [TASK] — task context, present in all variants
         lines.append("[TASK]")
         lines.append(f"task_goal: {self.task_goal or '(unspecified)'}")
 
-        # [AGENT]
-        if "agent_capabilities" not in self.drop_fields:
-            lines.append("[AGENT]")
-            lines.append(f"agent_capabilities: {list(self.agent_capabilities)}")
-
         # [PROPOSAL]
         lines.append("[PROPOSAL]")
+        lines.append(f"agent_reference: {proposal.agent_id}")
         if "title" not in self.drop_fields:
             lines.append(f"title: {proposal.title}")
         if "value" not in self.drop_fields:
@@ -87,11 +102,6 @@ class JsonController:
         else:
             lines.append("same_title_active: 'false' (active memory hidden)")
 
-        lines.append(
-            'Respond with ONLY this JSON: {"visibility": "absent"|"private"|"global", '
-            '"supersedes": null} — replace supersedes with a listed memory_id '
-            "only when this output updates that memory."
-        )
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ decide
@@ -100,7 +110,9 @@ class JsonController:
         proposal: MemoryProposal,
         current_state: Sequence[MemoryItem],
     ) -> MemoryTargetState:
-        raw = self.llm_fn(self.build_prompt(proposal, current_state))
+        self.last_prompt = self.build_prompt(proposal, current_state)
+        raw = self.llm_fn(self.last_prompt)
+        self.last_raw = raw
         error = self._validate(raw, current_state, proposal)
         if error is not None:
             self.rejections.append(
