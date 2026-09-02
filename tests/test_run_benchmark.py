@@ -7,6 +7,7 @@ from marble.controllers import qwen_lora
 from marble.experiments.run_benchmark import (
     BASELINES,
     make_controller,
+    make_governed,
     plan_runs,
     run_task,
     task_config,
@@ -26,6 +27,13 @@ def test_make_controller_checkpoint_roundtrip(tmp_path):
     src.save(str(p))
     ctrl = make_controller("learned_controller", controller_checkpoint=str(p))
     assert isinstance(ctrl, LocalPolicyController)
+
+
+def test_make_governed_drops_worker_runtime_argument(tmp_path):
+    runtime = make_governed(
+        "heuristic", tmp_path / "trace.jsonl", worker_model="deepseek-v4-flash"
+    )
+    assert runtime.controller is not None
 
 
 def test_learned_controller_unified_local_policy_without_key(monkeypatch):

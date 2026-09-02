@@ -163,6 +163,8 @@ def make_governed(
     ablation: Optional[str] = None,
     **qwen_runtime: Optional[str],
 ) -> GovernedMemory:
+    # worker_model is only used by the Memory-R1 adapter, not governed controllers.
+    qwen_runtime.pop("worker_model", None)
     return GovernedMemory(
         MemoryBank(),
         make_controller(
