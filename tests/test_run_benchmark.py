@@ -195,7 +195,7 @@ def test_single_agent_task_config_keeps_only_one_agent():
 
     assert len(cfg["agents"]) == 1
     chosen_id = cfg["agents"][0]["agent_id"]
-    assert all(chosen_id in relation for relation in cfg["relationships"])
+    assert cfg["relationships"] == []
     assert "backend" not in cfg["memory"]
 
 

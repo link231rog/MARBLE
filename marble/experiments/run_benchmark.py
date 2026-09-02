@@ -311,11 +311,8 @@ def task_config(
         chosen = cfg["agents"][0]
         chosen_id = chosen.get("agent_id")
         cfg["agents"] = [chosen]
-        cfg["relationships"] = [
-            relation
-            for relation in cfg["relationships"]
-            if chosen_id in relation
-        ]
+        # A single-agent episode has no valid cross-agent targets.
+        cfg["relationships"] = []
     # ponytail: original JSONL leaves env type/max_iterations empty; fill so
     # Engine.__init__ does not raise on an unsupported empty type
     _ENV_DEFAULTS = {"coding": "Coding", "research": "Research", "database": "DB",
