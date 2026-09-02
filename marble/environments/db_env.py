@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List
 
@@ -149,7 +150,7 @@ class DBEnvironment(BaseEnvironment):
                 colsize = anomaly["colsize"]
                 subprocess.run(
                     [
-                        "python",
+                        sys.executable,
                         "main.py",
                         "--anomaly",
                         anomaly_type,
