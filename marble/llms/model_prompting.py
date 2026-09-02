@@ -41,6 +41,7 @@ def model_prompting(
     )
     if effective_reasoning_effort is not None:
         extra_body["reasoning_effort"] = effective_reasoning_effort
+        extra_body["allowed_openai_params"] = ["reasoning_effort"]
     completion = litellm.completion(
         model=llm_model,
         messages=messages,

@@ -79,6 +79,10 @@ class TestModelPrompting(unittest.TestCase):
             )
 
         self.assertEqual(completion_mock.call_args.kwargs["reasoning_effort"], "none")
+        self.assertEqual(
+            completion_mock.call_args.kwargs["allowed_openai_params"],
+            ["reasoning_effort"],
+        )
 
 
 if __name__ == "__main__":
