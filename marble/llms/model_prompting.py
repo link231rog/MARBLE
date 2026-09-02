@@ -1,3 +1,5 @@
+import os
+
 import litellm
 from beartype import beartype
 from beartype.typing import Any, Dict, List, Optional
@@ -20,6 +22,7 @@ def model_prompting(
     mode: Optional[str] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> List[Message]:
     """
     Select model via router in LiteLLM with support for function calling.
@@ -33,6 +36,11 @@ def model_prompting(
     if "Qwen" in llm_model:
         # ponytail: disable Qwen3 thinking so content is populated and generation is fast
         extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+    effective_reasoning_effort = reasoning_effort or os.environ.get(
+        "MARBLE_REASONING_EFFORT"
+    )
+    if effective_reasoning_effort is not None:
+        extra_body["reasoning_effort"] = effective_reasoning_effort
     completion = litellm.completion(
         model=llm_model,
         messages=messages,

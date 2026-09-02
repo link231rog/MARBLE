@@ -63,6 +63,23 @@ class TestModelPrompting(unittest.TestCase):
         self.assertEqual(outer.snapshot(), expected)
         self.assertEqual(inner.snapshot(), expected)
 
+    def test_model_prompting_passes_reasoning_effort(self) -> None:
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=Message(content="OK", role="assistant"))],
+            usage=None,
+        )
+        with patch(
+            "marble.llms.model_prompting.litellm.completion",
+            return_value=completion,
+        ) as completion_mock:
+            model_prompting(
+                llm_model="openai/deepseek-v4-flash",
+                messages=[{"role": "user", "content": "hello"}],
+                reasoning_effort="none",
+            )
+
+        self.assertEqual(completion_mock.call_args.kwargs["reasoning_effort"], "none")
+
 
 if __name__ == "__main__":
     unittest.main()
