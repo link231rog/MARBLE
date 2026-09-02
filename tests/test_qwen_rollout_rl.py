@@ -65,6 +65,30 @@ def test_train_fresh_rollouts_skips_complete_round_and_resumes(tmp_path, monkeyp
     ]
 
 
+def test_train_fresh_rollouts_passes_seed_to_rollout_and_rl(tmp_path, monkeypatch):
+    initial = tmp_path / "initial"
+    _complete_checkpoint(initial)
+    observed = {}
+    tasks = [SimpleNamespace(task_id=1, benchmark="coding")]
+    monkeypatch.setattr(qwen_rollout_rl, "load_tasks", lambda *args, **kwargs: tasks)
+    monkeypatch.setattr(qwen_rollout_rl, "_apply_split", lambda value, split: value)
+
+    def collect(*args, **kwargs):
+        observed["collect_seed"] = kwargs["seed"]
+        return ["trace-a", "trace-b"], [1.0, 0.5], []
+
+    def train(*args, **kwargs):
+        observed["train_seed"] = kwargs["seed"]
+        _complete_checkpoint(Path(args[1]))
+
+    monkeypatch.setattr(qwen_rollout_rl, "collect_rollouts", collect)
+    monkeypatch.setattr(qwen_rollout_rl, "train_qwen_rl", train)
+    qwen_rollout_rl.train_fresh_rollouts(
+        "coding", str(initial), str(tmp_path / "training"), seed=42
+    )
+    assert observed == {"collect_seed": 42, "train_seed": 42}
+
+
 def test_resume_uses_checkpoint_from_training_manifest(tmp_path, monkeypatch):
     initial = tmp_path / "initial"
     _complete_checkpoint(initial)

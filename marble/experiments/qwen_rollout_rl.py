@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from marble.benchmarks import load_tasks
 from marble.controllers.qwen_lora import train_qwen_rl
 from marble.experiments.run_benchmark import _apply_split, run_task
+from marble.experiments.task_manifest import load_manifest_tasks
 
 
 def _read_score(summary_path: Path) -> float:
@@ -117,6 +119,7 @@ def collect_rollouts(
     max_cards: Optional[int] = None,
     _lambda: Optional[float] = None,
     beta: Optional[float] = None,
+    seed: int = 42,
 ) -> tuple[List[str], List[float], List[Dict[str, Any]]]:
     """Collect independent episodes from the current controller checkpoint."""
     if rollouts_per_task < 2:
@@ -142,6 +145,7 @@ def collect_rollouts(
                 controller_checkpoint=checkpoint,
                 qwen_base_model=qwen_base_model,
                 qwen_temperature=qwen_temperature,
+                seed=seed,
                 max_cards=max_cards if max_cards is not None else 6,
                 lambda_=_lambda if _lambda is not None else 0.05,
                 beta=beta if beta is not None else 0.25,
@@ -190,6 +194,7 @@ def train_fresh_rollouts(
     out_root: str,
     *,
     task_ids: Optional[List[int]] = None,
+    manifest: Optional[str] = None,
     limit: Optional[int] = None,
     rollouts_per_task: int = 2,
     rounds: int = 1,
@@ -204,12 +209,23 @@ def train_fresh_rollouts(
     max_cards: Optional[int] = None,
     _lambda: Optional[float] = None,
     beta: Optional[float] = None,
+    seed: int = 42,
 ) -> Dict[str, Any]:
     """Run repeated fresh-rollout -> REINFORCE updates from an SFT adapter."""
     if rounds < 1:
         raise ValueError("rounds must be at least 1")
-    tasks = load_tasks(benchmark, task_ids=task_ids, limit=limit)
-    tasks = _apply_split(tasks, split)
+    random.seed(seed)
+    if manifest:
+        tasks = [
+            task for task in load_manifest_tasks(manifest, split=split)
+            if task.benchmark == benchmark
+        ]
+        if task_ids is not None:
+            wanted = set(task_ids)
+            tasks = [task for task in tasks if task.task_id in wanted]
+    else:
+        tasks = load_tasks(benchmark, task_ids=task_ids, limit=limit)
+        tasks = _apply_split(tasks, split)
     if not tasks:
         raise ValueError("no benchmark tasks selected")
 
@@ -238,6 +254,8 @@ def train_fresh_rollouts(
         "task_ids": [task.task_id for task in tasks],
         "rollouts_per_task": rollouts_per_task,
         "rounds": rounds,
+        "seed": seed,
+        "manifest": str(Path(manifest).resolve()) if manifest else None,
         "final_checkpoint": current_checkpoint,
         "rounds_detail": round_records,
         "status": "running",
@@ -299,6 +317,7 @@ def train_fresh_rollouts(
                 max_cards=max_cards,
                 _lambda=_lambda,
                 beta=beta,
+                seed=seed,
             )
             _atomic_write_json(
                 round_manifest_path,
@@ -312,6 +331,7 @@ def train_fresh_rollouts(
                 qwen_base_model,
                 rewards=rewards,
                 init_checkpoint=current_checkpoint,
+                seed=seed,
             )
             if not _checkpoint_complete(next_checkpoint):
                 raise RuntimeError(
@@ -379,6 +399,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--checkpoint", required=True, help="initial SFT LoRA adapter")
     parser.add_argument("--out", required=True)
     parser.add_argument("--task-ids", default="")
+    parser.add_argument("--manifest", default=None, help="frozen task manifest JSON")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--rollouts-per-task", type=int, default=2)
     parser.add_argument("--rounds", type=int, default=1)
@@ -396,6 +417,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--lambda", type=float, default=None, dest="_lambda",
                         help="lambda value for reward")
     parser.add_argument("--beta", type=float, default=None, help="beta value for reward")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
     task_ids = [int(value) for value in args.task_ids.split(",") if value.strip()]
     train_fresh_rollouts(
@@ -403,6 +425,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         args.checkpoint,
         args.out,
         task_ids=task_ids or None,
+        manifest=args.manifest,
         limit=args.limit,
         rollouts_per_task=args.rollouts_per_task,
         rounds=args.rounds,
@@ -417,6 +440,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         max_cards=args.max_cards,
         _lambda=args._lambda,
         beta=args.beta,
+        seed=args.seed,
     )
 
 

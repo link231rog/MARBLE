@@ -40,6 +40,7 @@ from marble.experiments.ablations import (
     wrap_controller,
 )
 from marble.experiments.engine_bridge import MemoryStep, build_governed_engine_cls
+from marble.experiments.task_manifest import load_manifest_tasks, read_manifest
 from marble.memory import (
     GovernedMemory,
     MemoryBank,
@@ -863,6 +864,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--baseline", default="heuristic",
                     help=f"one of {BASELINES} or 'multi'")
     ap.add_argument("--split", default="all", help="all|train|test (deterministic by task_id)")
+    ap.add_argument("--manifest", default=None, help="frozen task manifest JSON")
     ap.add_argument("--task-ids", default="", help="comma-separated task ids")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--start", type=int, default=0)
@@ -913,12 +915,29 @@ def main(argv: Optional[List[str]] = None) -> None:
     bench_names = [b.strip() for b in args.benchmark.split(",") if b.strip()]
     if "all" in bench_names:
         bench_names = list(BENCHMARKS)
+    effective_seed = args.seed
+    if effective_seed is None and args.manifest:
+        manifest_seed = read_manifest(args.manifest).get("seed")
+        if manifest_seed is not None:
+            if not isinstance(manifest_seed, int) or isinstance(manifest_seed, bool):
+                raise ValueError("manifest seed must be an integer")
+            effective_seed = manifest_seed
     tasks: List[BenchmarkTask] = []
     for bn in bench_names:
         if bn not in BENCHMARKS:
             raise ValueError(f"unknown benchmark {bn!r}; choose from {BENCHMARKS} or 'all'")
-        tasks += load_tasks(bn, start=args.start, task_ids=task_ids)
-    tasks = _apply_split(tasks, args.split)
+    if args.manifest:
+        tasks = [
+            task for task in load_manifest_tasks(args.manifest, split=args.split)
+            if task.benchmark in bench_names
+        ]
+        if task_ids is not None:
+            wanted = set(task_ids)
+            tasks = [task for task in tasks if task.task_id in wanted]
+    else:
+        for bn in bench_names:
+            tasks += load_tasks(bn, start=args.start, task_ids=task_ids)
+        tasks = _apply_split(tasks, args.split)
     if args.limit:
         tasks = tasks[: args.limit]
     if args.worker_model:
@@ -931,8 +950,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     run_id = f"{args.benchmark}_{args.baseline}"
     if args.ablation:
         run_id += f"_ablation-{args.ablation.replace(':', '_')}"
-    if args.seed is not None:
-        run_id += f"_seed{args.seed}"
+    if effective_seed is not None:
+        run_id += f"_seed{effective_seed}"
     run_id += f"_cards{args.max_cards}_reads{args.max_reads_per_step}"
     run_id += f"_lambda{args.lambda_:g}_beta{args.beta:g}"
     out_root = (
@@ -945,7 +964,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         summary = run_task(
             task, baseline, out_root,
             dry_run=args.dry_run,
-            seed=args.seed,
+            seed=effective_seed,
             max_iterations=args.max_iterations,
             max_cards=args.max_cards,
             max_reads_per_step=args.max_reads_per_step,

@@ -89,5 +89,6 @@ def test_reward_override_beta_and_lambda(tmp_path):
     assert lambda0["m1"] > base["m1"]
     assert reward_override("reward", "beta0") == {"beta": 0.0}
     assert reward_override("reward", "lambda0") == {"lambda_": 0.0}
-    assert controller_kwargs("input", "no_topic_tags") == {"drop_fields": ("topics",)}
+    assert controller_kwargs("input", "no_task_goal") == {"drop_fields": ("task_goal",)}
+    assert controller_kwargs("input", "no_agent_tag") == {"drop_fields": ("agent_tag",)}
     assert reward_override("training", "scratch") == {}

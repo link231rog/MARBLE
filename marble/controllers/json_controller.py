@@ -72,11 +72,13 @@ class JsonController:
 
         # [TASK] — task context, present in all variants
         lines.append("[TASK]")
-        lines.append(f"task_goal: {self.task_goal or '(unspecified)'}")
+        if "task_goal" not in self.drop_fields:
+            lines.append(f"task_goal: {self.task_goal or '(unspecified)'}")
 
         # [PROPOSAL]
         lines.append("[PROPOSAL]")
-        lines.append(f"agent_reference: {proposal.agent_id}")
+        if "agent_tag" not in self.drop_fields:
+            lines.append(f"agent_reference: {proposal.agent_id}")
         if "title" not in self.drop_fields:
             lines.append(f"title: {proposal.title}")
         if "value" not in self.drop_fields:

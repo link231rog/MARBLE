@@ -53,3 +53,15 @@ def test_unknown_benchmark_raises():
 
 def test_all_benchmarks_present():
     assert set(BENCHMARKS) >= {"coding", "research", "database", "bargaining", "minecraft"}
+
+
+def test_frozen_manifest_has_expected_splits():
+    from marble.experiments.task_manifest import load_manifest_tasks
+
+    path = __import__("pathlib").Path(__file__).parents[1] / "configs/experiments/multiagentbench_frozen.json"
+    train = load_manifest_tasks(path, split="train")
+    test = load_manifest_tasks(path, split="test")
+    assert len(train) == 6
+    assert len(test) == 18
+    assert {task.benchmark for task in train + test} == {"database", "research"}
+    assert {len(task.agents) for task in train + test} <= {3, 4, 5}

@@ -69,6 +69,7 @@ def test_qwen_local_mode_loads_adapter_without_overloading_learned_controller(mo
 def test_qwen_sft_ablation_passes_drop_fields(monkeypatch):
     """Input/schema ablations must reach make_qwen_lora_controller as drop_fields."""
     seen = {}
+    monkeypatch.delenv("MARBLE_QWEN_API_BASE", raising=False)
 
     def fake_local(base_model, lora_dir, temperature=0.0):
         return lambda prompt: '{"visibility":"private","supersedes":null}'
@@ -86,10 +87,10 @@ def test_qwen_sft_ablation_passes_drop_fields(monkeypatch):
         "qwen_sft",
         controller_checkpoint="/adapters/sft",
         qwen_base_model="/models/qwen",
-        ablation="input:no_topic_tags",
+        ablation="input:no_agent_tag",
     )
-    assert seen["drop_fields"] == ("topics",)
-    # Verify the controller actually uses the drop_fields (topic absent from prompt)
+    assert seen["drop_fields"] == ("agent_tag",)
+    # Verify the controller actually removes the agent tag from its prompt.
     prompt = ctrl.build_prompt(
         MemoryProposal(
             proposal_id="p", task_id="t", agent_id="a", source="worker",
@@ -97,7 +98,7 @@ def test_qwen_sft_ablation_passes_drop_fields(monkeypatch):
         ),
         [],
     )
-    assert "topics" not in prompt.lower() or "[TOPICS]" not in prompt
+    assert "agent_reference" not in prompt
 
 
 def test_qwen_rl_schema_field_ablation_passes_drop_fields(monkeypatch):
@@ -385,6 +386,34 @@ def test_cli_parameters_propagate_to_dry_run(monkeypatch, tmp_path):
     recorded = json.loads(summary.read_text())
     assert recorded["retrieval"]["max_cards"] == 2
     assert recorded["reward_config"] == {"lambda": 0.1, "beta": 0.5}
+
+
+def test_manifest_seed_is_default_and_cli_seed_wins(monkeypatch, tmp_path):
+    from marble.experiments import run_benchmark
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"seed": 42, "tasks": []}), encoding="utf-8")
+    task = _task()
+    captured = []
+    monkeypatch.setattr(run_benchmark, "load_manifest_tasks", lambda *args, **kwargs: [task])
+    monkeypatch.setattr(
+        run_benchmark,
+        "run_task",
+        lambda task, baseline, out_root, **kwargs: captured.append(kwargs) or {"status": "dry_run", "task_id": task.task_id},
+    )
+
+    run_benchmark.main([
+        "--benchmark", "coding", "--baseline", "no_memory", "--manifest",
+        str(manifest), "--out", str(tmp_path / "default"), "--dry-run",
+    ])
+    assert captured[-1]["seed"] == 42
+
+    run_benchmark.main([
+        "--benchmark", "coding", "--baseline", "no_memory", "--manifest",
+        str(manifest), "--seed", "7", "--out", str(tmp_path / "explicit"),
+        "--dry-run",
+    ])
+    assert captured[-1]["seed"] == 7
 
 
 def test_database_score_uses_explicit_prediction_overlap():

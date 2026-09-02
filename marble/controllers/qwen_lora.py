@@ -446,6 +446,7 @@ def train_qwen_rl(
     max_len: int = 512,
     init_checkpoint: Optional[str] = None,
     max_grad_norm: float = 1.0,
+    seed: Optional[int] = None,
 ) -> str:
     """Trace-replay completion-level REINFORCE over a Qwen LoRA adapter.
 
@@ -468,6 +469,11 @@ def train_qwen_rl(
     from torch.utils.data import DataLoader, Dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import LoraConfig, PeftModel, get_peft_model
+
+    if seed is not None:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
 
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token_id is None:
