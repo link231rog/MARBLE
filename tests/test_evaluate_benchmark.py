@@ -184,6 +184,39 @@ def test_aggregation_keeps_settings_separate(tmp_path):
     assert agg["method=ours_rl|max_cards=6"]["task_score"] == 0.8
 
 
+def test_manifest_filters_all_train_and_test_rows(tmp_path):
+    def add_task(benchmark, task_id, score=0.5):
+        tdir = tmp_path / benchmark / str(task_id)
+        tdir.mkdir(parents=True)
+        (tdir / "summary.json").write_text(json.dumps({
+            "method": "ours_rl", "benchmark": benchmark, "task_id": task_id,
+            "status": "ok", "task_score": score, "score_status": "available",
+        }))
+        (tdir / "memory_trace.jsonl").write_text("")
+
+    add_task("database", 1)
+    add_task("database", 2)
+    add_task("research", 3)
+    add_task("coding", 99)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "splits": {
+            "train": [{"benchmark": "database", "task_id": 1}],
+            "test": [{"benchmark": "research", "task_id": 3}],
+        }
+    }))
+
+    assert {(r["benchmark"], r["task_id"]) for r in evaluate_run_root(
+        tmp_path, manifest=manifest, split="all"
+    )} == {("database", 1), ("research", 3)}
+    assert [(r["benchmark"], r["task_id"]) for r in evaluate_run_root(
+        tmp_path, manifest=manifest, split="train"
+    )] == [("database", 1)]
+    assert [(r["benchmark"], r["task_id"]) for r in evaluate_run_root(
+        tmp_path, manifest=manifest, split="test"
+    )] == [("research", 3)]
+
+
 def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):
     # layout produced by run_benchmark: root/run_id/baseline/benchmark/task_id/
     for baseline in ("no_memory", "heuristic"):

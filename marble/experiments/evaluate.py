@@ -7,6 +7,8 @@ import json
 import os
 from typing import Any, Dict, List
 
+from marble.experiments.task_manifest import read_manifest
+
 
 def setting_key(summary: Dict[str, Any]) -> str:
     """Return the explicit experiment setting, with legacy method fallback."""
@@ -229,13 +231,37 @@ def evaluate_run_root(
     run_root: str | os.PathLike,
     *,
     include_unavailable: bool = False,
+    manifest: str | os.PathLike | None = None,
+    split: str = "all",
 ) -> List[Dict[str, Any]]:
     """Task rows under runs/<run_id>/<benchmark>/<task_id>/."""
+    if split not in {"all", "train", "test"}:
+        raise ValueError("manifest split must be all|train|test")
+    allowed = None
+    if manifest is not None:
+        payload = read_manifest(manifest)
+        if "splits" in payload:
+            records = (
+                list(payload["splits"].get("train", []))
+                + list(payload["splits"].get("test", []))
+                if split == "all"
+                else list(payload["splits"].get(split, []))
+            )
+        else:
+            records = list(payload.get("tasks", []))
+        allowed = {
+            (str(record["benchmark"]), int(record["task_id"]))
+            for record in records
+        }
     root = os.fspath(run_root)
     rows: List[Dict[str, Any]] = []
     for dirpath, dirnames, filenames in os.walk(root):
         if "summary.json" in filenames:
             row = evaluate_task_dir(dirpath)
+            if allowed is not None and (
+                str(row.get("benchmark")), int(row.get("task_id"))
+            ) not in allowed:
+                continue
             if include_unavailable or row.get("score_status") == "available":
                 rows.append(row)
     return rows
@@ -292,6 +318,13 @@ def main(argv: List[str] | None = None) -> None:
         action="store_true",
         help="include rows whose score is unavailable for diagnostics",
     )
+    parser.add_argument("--manifest", help="frozen task manifest used for filtering")
+    parser.add_argument(
+        "--split",
+        choices=("all", "train", "test"),
+        default="all",
+        help="manifest split to evaluate",
+    )
     args = parser.parse_args(argv)
 
     # any summary.json below the root that is not the legacy root-level one
@@ -304,6 +337,8 @@ def main(argv: List[str] | None = None) -> None:
         rows = evaluate_run_root(
             args.run_dir,
             include_unavailable=args.include_unavailable,
+            manifest=args.manifest,
+            split=args.split,
         )
         print(json.dumps(
             aggregate_by_method(
