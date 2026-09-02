@@ -128,7 +128,7 @@ def test_qwen_rl_schema_field_ablation_passes_drop_fields(monkeypatch):
 
 def test_non_qwen_ablation_does_not_double_apply(monkeypatch):
     """Non-Qwen baselines must not be affected by input/schema ablation kwargs."""
-    ctrl = make_controller("heuristic", ablation="input:no_topic_tags")
+    ctrl = make_controller("heuristic", ablation="input:no_agent_tag")
     # heuristic is HeuristicController, not JsonController — no drop_fields
     assert not hasattr(ctrl, "drop_fields")
 

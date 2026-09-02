@@ -92,7 +92,7 @@ def test_factory_applies_input_drop_kwargs_to_runtime_prompt():
     prompts = []
     ctrl = make_qwen_lora_controller(
         lambda prompt: prompts.append(prompt) or '{"visibility": "global", "supersedes": null}',
-        **controller_kwargs("input", "no_topic_tags"),
+        **controller_kwargs("input", "no_agent_tag"),
     )
 
     ctrl.decide(
@@ -103,13 +103,12 @@ def test_factory_applies_input_drop_kwargs_to_runtime_prompt():
             source="worker",
             title="shared result",
             raw_value="x",
-            topics=("hidden-topic",),
             step_index=1,
         ),
         [],
     )
 
-    assert "hidden-topic" not in prompts[0]
+    assert "agent_reference: a1" not in prompts[0]
 
 
 def test_export_sft_pairs_one_per_decision(tmp_path):
