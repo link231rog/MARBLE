@@ -4,6 +4,7 @@ Logging utility module.
 
 import logging
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -22,6 +23,7 @@ def get_logger(name: str) -> logging.Logger:
         formatter = logging.Formatter(
             "[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s"
         )
+        Path("logs").mkdir(parents=True, exist_ok=True)
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         file_handler = RotatingFileHandler(
