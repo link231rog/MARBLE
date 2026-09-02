@@ -11,7 +11,7 @@ services:
       - 9090:9090
 
   postgres_db:
-    image: postgres
+    image: postgres:16-alpine
     ports:
       - 5432:5432
     volumes:
