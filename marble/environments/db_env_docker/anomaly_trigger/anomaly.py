@@ -36,7 +36,7 @@ def restart_postgresql():
     # return
     try:
         os.chdir("..")
-        os.system("sudo docker compose restart postgres_db")
+        os.system("docker compose restart postgres_db")
         print("PostgreSQL Service Rebooted")
     except Exception as e:
         print(f"Local command exec error: {e}")

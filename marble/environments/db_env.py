@@ -83,13 +83,13 @@ class DBEnvironment(BaseEnvironment):
     def start_docker_containers(self):
         print("Starting Docker containers...")
         subprocess.run(
-            ["sudo", "docker", "compose", "down", "-v"],
+            ["docker", "compose", "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             shell=False,
             check=True,
         )
         subprocess.run(
-            ["sudo", "docker", "compose", "up", "-d", "--remove-orphans"],
+            ["docker", "compose", "up", "-d", "--remove-orphans"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             check=True,
         )
@@ -408,7 +408,7 @@ class DBEnvironment(BaseEnvironment):
             "This function is STILL IN DEVELOPMENT. Please try again later."
         )
         # use a command
-        result = os.popen("sudo docker logs -tf db_env_docker-postgres_db-1").read()
+        result = os.popen("docker logs -tf db_env_docker-postgres_db-1").read()
         # get last 100 lines and make it string
         result = "\n".join(result.split("\n")[-100:])
         if result:
@@ -648,7 +648,7 @@ class DBEnvironment(BaseEnvironment):
 
     def terminate(self) -> None:
         subprocess.run(
-            ["sudo", "docker", "compose", "down"],
+            ["docker", "compose", "down"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             check=True,
         )
