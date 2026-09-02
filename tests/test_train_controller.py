@@ -58,13 +58,14 @@ def test_train_improves_accuracy_on_separable_data(tmp_path):
     assert accuracy(policy, samples) == 1.0
 
 
-def _episode(tmp_path, method, task_id, score_status="available"):
-    task_dir = tmp_path / method / "coding" / str(task_id)
+def _episode(tmp_path, method, task_id, score_status="available", benchmark="coding"):
+    task_dir = tmp_path / method / benchmark / str(task_id)
     task_dir.mkdir(parents=True)
     trace = task_dir / "memory_trace.jsonl"
     trace.write_text(json.dumps(_decision(f"m{task_id}", "shared result", "x=1", "global")) + "\n")
     (task_dir / "summary.json").write_text(json.dumps({
         "method": method,
+        "benchmark": benchmark,
         "task_id": task_id,
         "score_status": score_status,
     }))
@@ -98,3 +99,32 @@ def test_discover_sft_traces_keeps_legacy_direct_trace_paths(tmp_path):
     trace = _trace(tmp_path, "legacy.jsonl", [_decision("m1", "shared result", "x=1", "global")])
 
     assert discover_sft_traces([trace]) == [os.path.abspath(trace)]
+
+
+def test_discover_sft_traces_uses_frozen_manifest_split(tmp_path):
+    train_trace = _episode(tmp_path, "ours_sft", 1, benchmark="research")
+    test_trace = _episode(tmp_path, "ours_sft", 2, benchmark="research")
+    manifest = tmp_path / "frozen.json"
+    manifest.write_text(json.dumps({
+        "splits": {
+            "train": [{"benchmark": "research", "task_id": 1}],
+            "test": [{"benchmark": "research", "task_id": 2}],
+        }
+    }), encoding="utf-8")
+
+    assert discover_sft_traces([str(tmp_path)], manifest=str(manifest), split="train") == [
+        os.path.abspath(train_trace)
+    ]
+    assert discover_sft_traces([str(tmp_path)], manifest=str(manifest), split="test") == [
+        os.path.abspath(test_trace)
+    ]
+
+
+def test_manifest_keeps_direct_trace_compatibility(tmp_path):
+    trace = _trace(tmp_path, "legacy.jsonl", [_decision("m1", "shared result", "x=1", "global")])
+    manifest = tmp_path / "frozen.json"
+    manifest.write_text(json.dumps({"splits": {"train": [], "test": []}}), encoding="utf-8")
+
+    assert discover_sft_traces([trace], manifest=str(manifest), split="train") == [
+        os.path.abspath(trace)
+    ]

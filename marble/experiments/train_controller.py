@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from marble.controllers import LocalPolicyController, features
 from marble.controllers.local_policy import VISIBILITIES
 from marble.experiments.baselines import canonical_baseline
+from marble.experiments.task_manifest import read_manifest
 from marble.memory.schema import MemoryProposal
 
 
@@ -28,10 +29,26 @@ def _canonical_or_raw(name: Any) -> str:
         return str(name)
 
 
+def _manifest_keys(manifest_path: Path, split: str) -> set[tuple[str, int]]:
+    payload = read_manifest(manifest_path)
+    if "splits" in payload:
+        if split == "all":
+            records = [
+                *payload["splits"].get("train", []),
+                *payload["splits"].get("test", []),
+            ]
+        else:
+            records = list(payload["splits"].get(split, []))
+    else:
+        records = list(payload.get("tasks", []))
+    return {(str(item["benchmark"]), int(item["task_id"])) for item in records}
+
+
 def _trace_from_manifest(
     manifest_path: Path,
     baseline: Optional[str],
     split: str,
+    allowed_keys: Optional[set[tuple[str, int]]] = None,
 ) -> Optional[str]:
     with manifest_path.open(encoding="utf-8") as fh:
         manifest = json.load(fh)
@@ -41,7 +58,13 @@ def _trace_from_manifest(
     if baseline and _canonical_or_raw(manifest.get("method", "")) != baseline:
         return None
     task_id = manifest.get("task_id")
-    if split != "all" and (task_id is None or not _in_split(task_id, split)):
+    if allowed_keys is not None:
+        benchmark = manifest.get("benchmark")
+        if benchmark is None or task_id is None:
+            return None
+        if (str(benchmark), int(task_id)) not in allowed_keys:
+            return None
+    elif split != "all" and (task_id is None or not _in_split(task_id, split)):
         return None
 
     trace_path = manifest_path.with_name("memory_trace.jsonl")
@@ -52,11 +75,13 @@ def discover_sft_traces(
     paths: Iterable[str],
     baseline: Optional[str] = None,
     split: str = "train",
+    manifest: Optional[str] = None,
 ) -> List[str]:
     """Resolve direct traces and benchmark manifests into usable SFT traces."""
     if split not in ("all", "train", "test"):
         raise ValueError("split must be one of: all, train, test")
     canonical = canonical_baseline(baseline) if baseline else None
+    allowed_keys = _manifest_keys(Path(manifest), split) if manifest else None
     traces = set()
 
     for raw_path in paths:
@@ -75,7 +100,9 @@ def discover_sft_traces(
             continue
 
         for manifest in manifests:
-            trace_path = _trace_from_manifest(manifest, canonical, split)
+            trace_path = _trace_from_manifest(
+                manifest, canonical, split, allowed_keys=allowed_keys
+            )
             if trace_path:
                 traces.add(trace_path)
     return sorted(traces)
@@ -145,6 +172,8 @@ if __name__ == "__main__":
                         help="optional source baseline; legacy aliases are accepted")
     parser.add_argument("--split", choices=("all", "train", "test"), default="train",
                         help="episode split for manifest-backed traces")
+    parser.add_argument("--manifest", default=None,
+                        help="frozen experiment manifest for summary-backed trace filtering")
     parser.add_argument("--out", default="runs/local_policy.json")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--init", default=None, help="SFT checkpoint to start RL from")
@@ -161,6 +190,7 @@ if __name__ == "__main__":
             [*(args.traces or []), *args.run_dir],
             baseline=args.baseline,
             split=args.split,
+            manifest=args.manifest,
         )
         if not trace_paths:
             parser.error("no usable traces found")
