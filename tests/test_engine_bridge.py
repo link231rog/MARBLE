@@ -55,6 +55,8 @@ def test_before_act_lists_keys_and_reads_selected(tmp_path):
     assert step.reads_this_episode == 1
     events = _events(tp)
     assert any(e["event"] == "memory_read" and e["reader_id"] == "coder" for e in events)
+    exposure = next(e for e in events if e["event"] == "memory_exposure")
+    assert exposure["memory_ids"] == [item.memory_id]
 
 
 def test_before_act_counts_key_cards_and_notes_separately(tmp_path):

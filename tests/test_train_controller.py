@@ -1,8 +1,14 @@
+import hashlib
 import json
 import os
 
 from marble.controllers import LocalPolicyController
-from marble.experiments.train_controller import accuracy, load_samples, train
+from marble.experiments.train_controller import (
+    accuracy,
+    discover_sft_traces,
+    load_samples,
+    train,
+)
 
 
 def _trace(tmp_path, name, rows):
@@ -50,3 +56,45 @@ def test_train_improves_accuracy_on_separable_data(tmp_path):
     policy = LocalPolicyController.load(out)
     samples = load_samples([trace])
     assert accuracy(policy, samples) == 1.0
+
+
+def _episode(tmp_path, method, task_id, score_status="available"):
+    task_dir = tmp_path / method / "coding" / str(task_id)
+    task_dir.mkdir(parents=True)
+    trace = task_dir / "memory_trace.jsonl"
+    trace.write_text(json.dumps(_decision(f"m{task_id}", "shared result", "x=1", "global")) + "\n")
+    (task_dir / "summary.json").write_text(json.dumps({
+        "method": method,
+        "task_id": task_id,
+        "score_status": score_status,
+    }))
+    return str(trace)
+
+
+def test_discover_sft_traces_uses_train_split_and_canonical_baselines(tmp_path):
+    train_task = next(
+        task_id for task_id in range(100)
+        if int(hashlib.sha256(str(task_id).encode()).hexdigest(), 16) % 10 < 8
+    )
+    other_train_task = next(
+        task_id for task_id in range(train_task + 1, 100)
+        if int(hashlib.sha256(str(task_id).encode()).hexdigest(), 16) % 10 < 8
+    )
+    test_task = next(
+        task_id for task_id in range(100)
+        if int(hashlib.sha256(str(task_id).encode()).hexdigest(), 16) % 10 >= 8
+    )
+    included = _episode(tmp_path, "qwen_sft", train_task)
+    _episode(tmp_path, "ours_sft", test_task)
+    _episode(tmp_path, "ours_sft", other_train_task, score_status="unavailable")
+    _episode(tmp_path, "heuristic", train_task + 200)
+
+    traces = discover_sft_traces([str(tmp_path)], baseline="ours_sft", split="train")
+
+    assert traces == [os.path.abspath(included)]
+
+
+def test_discover_sft_traces_keeps_legacy_direct_trace_paths(tmp_path):
+    trace = _trace(tmp_path, "legacy.jsonl", [_decision("m1", "shared result", "x=1", "global")])
+
+    assert discover_sft_traces([trace]) == [os.path.abspath(trace)]

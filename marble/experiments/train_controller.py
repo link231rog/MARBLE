@@ -3,12 +3,82 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
 from marble.controllers import LocalPolicyController, features
 from marble.controllers.local_policy import VISIBILITIES
+from marble.experiments.baselines import canonical_baseline
 from marble.memory.schema import MemoryProposal
+
+
+def _in_split(task_id: Any, split: str) -> bool:
+    if split == "all":
+        return True
+    bucket = int(hashlib.sha256(str(task_id).encode()).hexdigest(), 16) % 10
+    return (bucket < 8) == (split == "train")
+
+
+def _canonical_or_raw(name: Any) -> str:
+    try:
+        return canonical_baseline(str(name))
+    except ValueError:
+        return str(name)
+
+
+def _trace_from_manifest(
+    manifest_path: Path,
+    baseline: Optional[str],
+    split: str,
+) -> Optional[str]:
+    with manifest_path.open(encoding="utf-8") as fh:
+        manifest = json.load(fh)
+
+    if manifest.get("score_status") == "unavailable":
+        return None
+    if baseline and _canonical_or_raw(manifest.get("method", "")) != baseline:
+        return None
+    task_id = manifest.get("task_id")
+    if split != "all" and (task_id is None or not _in_split(task_id, split)):
+        return None
+
+    trace_path = manifest_path.with_name("memory_trace.jsonl")
+    return str(trace_path.resolve()) if trace_path.is_file() else None
+
+
+def discover_sft_traces(
+    paths: Iterable[str],
+    baseline: Optional[str] = None,
+    split: str = "train",
+) -> List[str]:
+    """Resolve direct traces and benchmark manifests into usable SFT traces."""
+    if split not in ("all", "train", "test"):
+        raise ValueError("split must be one of: all, train, test")
+    canonical = canonical_baseline(baseline) if baseline else None
+    traces = set()
+
+    for raw_path in paths:
+        path = Path(raw_path)
+        if path.is_dir():
+            manifests = sorted(path.rglob("summary.json"))
+        elif path.name == "summary.json":
+            manifests = [path]
+        elif path.suffix == ".jsonl":
+            manifest = path.with_name("summary.json")
+            if not manifest.is_file():
+                traces.add(str(path.resolve()))
+                continue
+            manifests = [manifest]
+        else:
+            continue
+
+        for manifest in manifests:
+            trace_path = _trace_from_manifest(manifest, canonical, split)
+            if trace_path:
+                traces.add(trace_path)
+    return sorted(traces)
 
 
 def load_samples(trace_paths: List[str]) -> List[Dict[str, Any]]:
@@ -67,7 +137,14 @@ if __name__ == "__main__":
                         default="sft",
                         help="sft/rl: linear LocalPolicy; qwen_sft: LoRA SFT; "
                              "qwen_rl: trace-replay completion-level REINFORCE")
-    parser.add_argument("--traces", nargs="+", required=True)
+    parser.add_argument("--traces", nargs="+", default=None,
+                        help="trace files or summary.json manifests")
+    parser.add_argument("--run-dir", action="append", default=[],
+                        help="benchmark run directory to search for summaries")
+    parser.add_argument("--baseline", default=None,
+                        help="optional source baseline; legacy aliases are accepted")
+    parser.add_argument("--split", choices=("all", "train", "test"), default="train",
+                        help="episode split for manifest-backed traces")
     parser.add_argument("--out", default="runs/local_policy.json")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--init", default=None, help="SFT checkpoint to start RL from")
@@ -79,11 +156,23 @@ if __name__ == "__main__":
     parser.add_argument("--base-model", default="Qwen/Qwen3-4B-Instruct-2507",
                         help="base model for Qwen LoRA training")
     args = parser.parse_args()
+    if args.mode in ("sft", "qwen_sft", "sft-qwen"):
+        trace_paths = discover_sft_traces(
+            [*(args.traces or []), *args.run_dir],
+            baseline=args.baseline,
+            split=args.split,
+        )
+        if not trace_paths:
+            parser.error("no usable traces found")
+    else:
+        if not args.traces:
+            parser.error("--traces is required for RL")
+        trace_paths = args.traces
     if args.mode in ("qwen_sft", "qwen_rl", "sft-qwen", "rl-qwen"):
         from marble.controllers import qwen_lora
 
         if args.mode in ("qwen_sft", "sft-qwen"):
-            pairs = qwen_lora.export_sft_pairs(args.traces)
+            pairs = qwen_lora.export_sft_pairs(trace_paths)
             qwen_lora.train_qwen_sft(pairs, args.out, args.base_model, epochs=args.epochs)
         else:
             if not args.rewards:
@@ -93,7 +182,7 @@ if __name__ == "__main__":
                 for reward_path in args.rewards
             ]
             qwen_lora.train_qwen_rl(
-                args.traces, args.out, args.base_model, rewards=rewards,
+                trace_paths, args.out, args.base_model, rewards=rewards,
                 epochs=args.epochs, init_checkpoint=args.init,
             )
     elif args.mode == "rl":
@@ -107,8 +196,8 @@ if __name__ == "__main__":
                 with open(rp, encoding="utf-8") as fh:
                     task_scores.append(float(json.load(fh).get("task_score", 0.0)))
             baseline = sum(task_scores) / len(task_scores) if task_scores else 0.0
-        train_rl(args.traces, args.out, init_checkpoint=args.init,
+        train_rl(trace_paths, args.out, init_checkpoint=args.init,
                  epochs=args.epochs, lr=0.05, r_episode=args.r_episode,
                  task_scores=task_scores, same_task_baseline=baseline)
     else:
-        train(args.traces, args.out, epochs=args.epochs)
+        train(trace_paths, args.out, epochs=args.epochs)

@@ -52,6 +52,13 @@ class MemoryStep:
         cards = self.memory.visible_keys(
             reader_id=agent_id, task_id=self.task_id, query=task_text, top_k=self.max_cards
         )
+        trace = getattr(self.memory, "trace", None)
+        if trace is not None and hasattr(trace, "log_exposure"):
+            trace.log_exposure(
+                [card.memory_id for card in cards],
+                reader_id=agent_id,
+                task_id=self.task_id,
+            )
         key_lines: List[str] = []
         notes: List[str] = []
         if cards:
@@ -60,6 +67,8 @@ class MemoryStep:
                 *[f"- {c.memory_id} | {c.title} | {c.visibility} | owner={c.owner_id}" for c in cards],
             ]
             notes = self._read_selected(agent_id, cards)
+            if hasattr(self.memory, "distill"):
+                notes = self.memory.distill(task_text, notes)
         note_lines = ["Read notes:", *notes] if notes else []
         parts = [task_text, *key_lines, *note_lines]
         augmented = "\n".join(parts)

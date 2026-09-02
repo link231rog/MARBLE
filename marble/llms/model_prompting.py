@@ -4,6 +4,7 @@ from beartype.typing import Any, Dict, List, Optional
 from litellm.types.utils import Message
 
 from marble.llms.error_handler import api_calling_error_exponential_backoff
+from marble.llms.usage import record_successful_completion
 
 
 @beartype
@@ -52,4 +53,5 @@ def model_prompting(
     elif message_0.content is None:
         message_0.content = getattr(message_0, "reasoning_content", None) or ""
     assert isinstance(message_0, Message)
+    record_successful_completion(completion)
     return [message_0]

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from marble.controllers.json_controller import JsonController
+from marble.llms.usage import record_successful_completion
 
 
 def api_generate_fn(
@@ -39,6 +40,7 @@ def api_generate_fn(
             max_tokens=max_tokens,
             temperature=0.0,
         )
+        record_successful_completion(resp)
         return (resp.choices[0].message.content or "").strip()
 
     return gen
@@ -256,11 +258,22 @@ def load_qwen_rl_samples(
 
     from marble.memory.rewards import proposal_rewards
 
-    episodes: List[Tuple[List[Dict[str, Any]], float, str]] = []
-    scores_by_task: Dict[str, List[float]] = {}
+    episodes: List[Tuple[List[Dict[str, Any]], float, Tuple[str, str]]] = []
+    scores_by_task: Dict[Tuple[str, str], List[float]] = {}
     for trace_path, reward in zip(trace_paths, rewards):
         with open(trace_path, encoding="utf-8") as fh:
             events = [json.loads(line) for line in fh if line.strip()]
+        summary_path = Path(trace_path).with_name("summary.json")
+        summary: Dict[str, Any] = {}
+        if summary_path.is_file():
+            with summary_path.open(encoding="utf-8") as fh:
+                summary = json.load(fh)
+        metadata = next(
+            (event for event in events if "score_status" in event or "benchmark" in event),
+            {},
+        )
+        if summary.get("score_status", metadata.get("score_status")) == "unavailable":
+            continue
         decisions = [
             event for event in events if event.get("event") == "memory_decision"
         ]
@@ -269,9 +282,11 @@ def load_qwen_rl_samples(
         task_id = str(decisions[0].get("proposal", {}).get("task_id", ""))
         if not task_id:
             raise ValueError(f"trace {trace_path} has no decision task_id")
+        benchmark = str(summary.get("benchmark", metadata.get("benchmark", "")))
         score = float(reward)
-        episodes.append((events, score, task_id))
-        scores_by_task.setdefault(task_id, []).append(score)
+        task_key = (benchmark, task_id)
+        episodes.append((events, score, task_key))
+        scores_by_task.setdefault(task_key, []).append(score)
     undersized = sorted(task for task, scores in scores_by_task.items() if len(scores) < 2)
     if undersized:
         raise ValueError(
@@ -288,8 +303,8 @@ def load_qwen_rl_samples(
         "skipped_no_prompt": 0,
         "skipped_no_credit": 0,
     }
-    for events, score, task_id in episodes:
-        baseline = sum(scores_by_task[task_id]) / len(scores_by_task[task_id])
+    for events, score, task_key in episodes:
+        baseline = sum(scores_by_task[task_key]) / len(scores_by_task[task_key])
         credits = proposal_rewards(
             events, task_score=score, same_task_baseline=baseline
         )

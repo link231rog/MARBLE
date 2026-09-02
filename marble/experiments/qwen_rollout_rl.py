@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from marble.benchmarks import load_tasks
 from marble.controllers.qwen_lora import train_qwen_rl
-from marble.experiments.run_benchmark import run_task
+from marble.experiments.run_benchmark import _apply_split, run_task
 
 
 def _read_score(summary_path: Path) -> float:
@@ -39,6 +39,10 @@ def collect_rollouts(
     retrieval: str,
     worker_model: Optional[str],
     ablation: Optional[str],
+    split: str = "train",
+    max_cards: Optional[int] = None,
+    _lambda: Optional[float] = None,
+    beta: Optional[float] = None,
 ) -> tuple[List[str], List[float], List[Dict[str, Any]]]:
     """Collect independent episodes from the current controller checkpoint."""
     if rollouts_per_task < 2:
@@ -54,7 +58,7 @@ def collect_rollouts(
             episode_root = out_root / f"rollout-{rollout_id:03d}"
             summary = run_task(
                 task,
-                "qwen_sft",
+                "ours_sft",
                 episode_root,
                 max_iterations=max_iterations,
                 max_reads_per_step=max_reads_per_step,
@@ -64,16 +68,32 @@ def collect_rollouts(
                 controller_checkpoint=checkpoint,
                 qwen_base_model=qwen_base_model,
                 qwen_temperature=qwen_temperature,
+                max_cards=max_cards if max_cards is not None else 6,
+                lambda_=_lambda if _lambda is not None else 0.05,
+                beta=beta if beta is not None else 0.25,
             )
-            trace_path = (
+            # Prefer canonical ours_sft directory, fall back to legacy qwen_sft
+            ours_trace = (
+                episode_root
+                / "ours_sft"
+                / task.benchmark
+                / str(task.task_id)
+                / "memory_trace.jsonl"
+            )
+            qwen_trace = (
                 episode_root
                 / "qwen_sft"
                 / task.benchmark
                 / str(task.task_id)
                 / "memory_trace.jsonl"
             )
+            trace_path = ours_trace if ours_trace.exists() else qwen_trace
             summary_path = trace_path.with_name("summary.json")
             score = _read_score(summary_path)
+            # Reject or skip a rollout unless summary score_status equals available
+            # and status is successful
+            if summary.get("score_status") != "available" or summary.get("status") != "ok":
+                continue
             record = {
                 "benchmark": task.benchmark,
                 "task_id": task.task_id,
@@ -106,11 +126,16 @@ def train_fresh_rollouts(
     retrieval: str = "key_first",
     worker_model: Optional[str] = None,
     ablation: Optional[str] = None,
+    split: str = "train",
+    max_cards: Optional[int] = None,
+    _lambda: Optional[float] = None,
+    beta: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run repeated fresh-rollout -> REINFORCE updates from an SFT adapter."""
     if rounds < 1:
         raise ValueError("rounds must be at least 1")
     tasks = load_tasks(benchmark, task_ids=task_ids, limit=limit)
+    tasks = _apply_split(tasks, split)
     if not tasks:
         raise ValueError("no benchmark tasks selected")
 
@@ -131,6 +156,10 @@ def train_fresh_rollouts(
             retrieval=retrieval,
             worker_model=worker_model,
             ablation=ablation,
+            split=split,
+            max_cards=max_cards,
+            _lambda=_lambda,
+            beta=beta,
         )
         (round_root / "rollout_manifest.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
@@ -192,6 +221,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--retrieval", default="key_first")
     parser.add_argument("--worker-model", default=None)
     parser.add_argument("--ablation", default=None)
+    parser.add_argument("--split", default="train", help="train/test split for tasks")
+    parser.add_argument("--max-cards", type=int, default=None, help="max cards for retrieval")
+    parser.add_argument("--lambda", type=float, default=None, dest="_lambda",
+                        help="lambda value for reward")
+    parser.add_argument("--beta", type=float, default=None, help="beta value for reward")
     args = parser.parse_args(argv)
     task_ids = [int(value) for value in args.task_ids.split(",") if value.strip()]
     train_fresh_rollouts(
@@ -209,6 +243,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         retrieval=args.retrieval,
         worker_model=args.worker_model,
         ablation=args.ablation,
+        split=args.split,
+        max_cards=args.max_cards,
+        _lambda=args._lambda,
+        beta=args.beta,
     )
 
 

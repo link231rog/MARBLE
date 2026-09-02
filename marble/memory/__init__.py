@@ -1,6 +1,8 @@
 from .base_memory import BaseMemory
 from .bank import MemoryBank
 from .governed_memory import GovernedMemory
+from .memory_r1 import MemoryR1Memory
+from .memory_r1_adapter import MemoryR1Adapter
 from .retriever import KeyRetriever
 from .rewards import EpisodeStats, episode_reward, proposal_rewards, token_count
 from .schema import MemoryCard, MemoryItem, MemoryProposal, MemoryTargetState
@@ -15,6 +17,8 @@ __all__ = [
     "MemoryCard",
     "MemoryItem",
     "MemoryProposal",
+    "MemoryR1Adapter",
+    "MemoryR1Memory",
     "MemoryTargetState",
     "TraceLogger",
     "episode_reward",

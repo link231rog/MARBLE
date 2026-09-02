@@ -10,7 +10,10 @@ import hashlib
 import json
 import os
 import random
+import re
+import secrets
 import socket
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -20,8 +23,14 @@ from marble.controllers import (
     AbsentController,
     GlobalAlwaysController,
     HeuristicController,
+    LTSStyleController,
     LocalPolicyController,
     PrivateOnlyController,
+)
+from marble.experiments.baselines import (
+    MAIN_BASELINES,
+    baseline_spec,
+    canonical_baseline,
 )
 from marble.experiments.ablations import (
     apply_to_task_config,
@@ -31,17 +40,18 @@ from marble.experiments.ablations import (
     wrap_controller,
 )
 from marble.experiments.engine_bridge import MemoryStep, build_governed_engine_cls
-from marble.memory import GovernedMemory, MemoryBank, TraceLogger
-
-BASELINES = (
-    "no_memory",
-    "global_always",
-    "private_only",
-    "heuristic",
-    "learned_controller",
-    "qwen_sft",
-    "qwen_rl",
+from marble.memory import (
+    GovernedMemory,
+    MemoryBank,
+    MemoryR1Adapter,
+    MemoryR1Memory,
+    TraceLogger,
 )
+from marble.memory.memory_r1_adapter import parse_crud_decision
+from marble.memory.rewards import measured_memory_cost, token_count
+
+# Kept as the public runner constant for existing callers/tests.
+BASELINES = MAIN_BASELINES
 
 # ponytail: dataset llm is often ""; workers run through litellm, so a missing
 # model string must not reach BaseAgent as "". Fall back to an env-overridable
@@ -63,16 +73,20 @@ def make_controller(
     qwen_api_model: Optional[str] = None,
     qwen_temperature: float = 0.0,
 ) -> Any:
+    baseline = canonical_baseline(baseline)
+    spec = baseline_spec(baseline)
     controller: Any = None
-    if baseline == "no_memory":
+    if spec.controller == "absent":
         controller = AbsentController()
-    elif baseline == "global_always":
+    elif spec.controller == "global_add_all":
         controller = GlobalAlwaysController()
-    elif baseline == "private_only":
+    elif spec.controller == "private_only":
         controller = PrivateOnlyController()
-    elif baseline == "heuristic":
+    elif spec.controller == "heuristic":
         controller = HeuristicController()
-    elif baseline == "learned_controller":
+    elif spec.controller == "lts_binary":
+        controller = LTSStyleController()
+    elif spec.controller == "local_policy":
         # unified learned controller: LocalPolicyController (linear policy).
         # Untrained (no checkpoint) -> argmax over zero weights -> absent.
         # With checkpoint -> loaded policy. Same component in Stage B and Stage E
@@ -82,7 +96,7 @@ def make_controller(
             if controller_checkpoint
             else LocalPolicyController()
         )
-    elif baseline in ("qwen_sft", "qwen_rl"):
+    elif spec.controller in ("qwen_sft", "qwen_rl"):
         from marble.controllers.qwen_lora import (
             api_generate_fn,
             local_generate_fn,
@@ -123,9 +137,18 @@ def make_controller(
             generate_fn = local_generate_fn(
                 base_model, controller_checkpoint, temperature=qwen_temperature
             )
-        controller = make_qwen_lora_controller(generate_fn)
-    else:
-        raise ValueError(f"unknown baseline {baseline!r}; choose from {BASELINES}")
+        # Pass ablation kwargs (drop_fields) so input/schema ablations
+        # actually change the Qwen controller prompt.
+        qwen_kw: Dict[str, Any] = {}
+        if ablation:
+            _f, _o = parse_ablation(ablation)
+            qwen_kw = controller_kwargs(_f, _o)
+        controller = make_qwen_lora_controller(generate_fn, **qwen_kw)
+    elif spec.controller == "memory_r1_crud":
+        # R1's manager is a storage runtime selected by make_memory_runtime().
+        controller = None
+    else:  # pragma: no cover - registry validation makes this unreachable
+        raise AssertionError(f"unhandled controller type {spec.controller!r}")
     if ablation:
         factor, option = parse_ablation(ablation)
         controller = wrap_controller(controller, factor, option)
@@ -151,6 +174,87 @@ def make_governed(
     )
 
 
+def make_memory_runtime(
+    baseline: str,
+    trace_path: str | Path,
+    controller_checkpoint: Optional[str] = None,
+    ablation: Optional[str] = None,
+    **qwen_runtime: Optional[str],
+) -> Any:
+    """Build the storage runtime for either governed or R1-style methods."""
+    baseline = canonical_baseline(baseline)
+    if baseline == "memory_r1_style":
+        worker_model = str(qwen_runtime.pop("worker_model", "") or DEFAULT_WORKER_MODEL)
+        return MemoryR1Adapter(
+            memory=MemoryR1Memory(),
+            trace=TraceLogger(str(trace_path)),
+            manager=_make_r1_manager(worker_model),
+            distill_fn=_make_r1_distiller(worker_model),
+        )
+    return make_governed(
+        baseline,
+        trace_path,
+        controller_checkpoint,
+        ablation,
+        **qwen_runtime,
+    )
+
+
+def _worker_completion(model: str, prompt: str, max_tokens: int) -> str:
+    """Use the experiment worker model for R1's adapted manager/distiller."""
+    from marble.llms.model_prompting import model_prompting
+
+    response = model_prompting(
+        llm_model=model,
+        messages=[{"role": "user", "content": prompt}],
+        return_num=1,
+        max_token_num=max_tokens,
+        temperature=0.0,
+        top_p=None,
+        stream=None,
+    )[0]
+    return str(getattr(response, "content", "") or "")
+
+
+def _make_r1_manager(worker_model: str):
+    def manager(proposal, active):
+        index = [
+            {"memory_id": item.memory_id, "title": item.title}
+            for item in active
+        ]
+        prompt = (
+            "Manage one task-scoped global memory store. Choose ADD for a new useful "
+            "memory, UPDATE to replace an active duplicate, DELETE for an active "
+            "memory made invalid by the proposal, or NOOP for noise. "
+            'Return only JSON: {"operation":"ADD|UPDATE|DELETE|NOOP","memory_id":'
+            'null|"active id"}.\n'
+            f"active: {json.dumps(index, ensure_ascii=False)}\n"
+            f"proposal title: {proposal.title}\nproposal value: {proposal.raw_value[:512]}"
+        )
+        raw = _worker_completion(worker_model, prompt, max_tokens=64)
+        decision = parse_crud_decision(raw, active)
+        decision.update(
+            manager_input_tokens=token_count(prompt),
+            manager_output_tokens=token_count(raw),
+            manager_api_calls=1,
+        )
+        return decision
+
+    return manager
+
+
+def _make_r1_distiller(worker_model: str):
+    def distill(task_text: str, notes: List[str]) -> str:
+        prompt = (
+            "Select and compact only evidence useful for answering the task. "
+            "Do not add facts. Return plain concise notes.\n"
+            f"task: {task_text}\nmemories:\n" + "\n".join(notes)
+        )
+        return _worker_completion(worker_model, prompt, max_tokens=192)
+
+    return distill
+
+
 # --------------------------------------------------------------------- config
 def task_config(
     task: BenchmarkTask,
@@ -162,6 +266,10 @@ def task_config(
     ablation: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Original record + governed memory block injected (source untouched)."""
+    if max_cards < 0 or max_reads_per_step < 0:
+        raise ValueError("max_cards and max_reads_per_step must be non-negative")
+    baseline = canonical_baseline(baseline)
+    spec = baseline_spec(baseline)
     # ponytail: deployment pins worker via MARBLE_WORKER_MODEL env; that MUST
     # override per-dataset llm (e.g. minecraft ships "gpt-4o-mini").
     worker = llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL
@@ -194,6 +302,17 @@ def task_config(
     # worker so a single pinned model serves the whole episode.
     for _agent in cfg["agents"]:
         _agent["llm"] = worker
+    if spec.single_agent:
+        if not cfg["agents"]:
+            raise ValueError(f"task {task.task_id} has no agents for single_agent baseline")
+        chosen = cfg["agents"][0]
+        chosen_id = chosen.get("agent_id")
+        cfg["agents"] = [chosen]
+        cfg["relationships"] = [
+            relation
+            for relation in cfg["relationships"]
+            if chosen_id in relation
+        ]
     # ponytail: original JSONL leaves env type/max_iterations empty; fill so
     # Engine.__init__ does not raise on an unsupported empty type
     _ENV_DEFAULTS = {"coding": "Coding", "research": "Research", "database": "DB",
@@ -205,7 +324,7 @@ def task_config(
         env["type"] = _ENV_DEFAULTS.get(task.benchmark, "Base")
     if not str(env.get("max_iterations", "")).strip():
         env["max_iterations"] = 10
-    if baseline != "no_memory":
+    if spec.uses_memory:
         cfg["memory"] = {
             **cfg["memory"],
             "backend": "governed",
@@ -240,12 +359,45 @@ def plan_runs(
     """Expand 'multi' into every fixed+learned baseline."""
     expanded: List[str] = []
     for b in baselines:
-        expanded += list(BASELINES) if b == "multi" else [b]
+        expanded += list(BASELINES) if b == "multi" else [canonical_baseline(b)]
     seen: List[str] = []
     for b in expanded:
         if b not in seen:
             seen.append(b)
     return [(b, t) for b in seen for t in tasks]
+
+
+def _new_run_root(base_root: str | Path, descriptor: str) -> Path:
+    base = Path(base_root)
+    base.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())
+    while True:
+        candidate = base / f"{descriptor}_{timestamp}_{secrets.token_hex(3)}"
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+
+
+def _append_run_event(
+    run_root: str | Path,
+    event: str,
+    task: BenchmarkTask,
+    **details: Any,
+) -> None:
+    record = {
+        "event": event,
+        "timestamp": time.time(),
+        "baseline": canonical_baseline(details.pop("baseline", "")),
+        "benchmark": task.benchmark,
+        "task_id": task.task_id,
+        **details,
+    }
+    path = Path(run_root) / "run_events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def run_task(
@@ -267,11 +419,36 @@ def run_task(
     qwen_api_key: Optional[str] = None,
     qwen_api_model: Optional[str] = None,
     qwen_temperature: float = 0.0,
+    lambda_: float = 0.05,
+    beta: float = 0.25,
 ) -> Dict[str, Any]:
+    if lambda_ < 0:
+        raise ValueError("lambda must be non-negative")
+    if beta < 0:
+        raise ValueError("beta must be non-negative")
+    baseline = canonical_baseline(baseline)
     if seed is not None:
         random.seed(seed)
     tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
     tdir.mkdir(parents=True, exist_ok=True)
+    _append_run_event(out_root, "task_start", task, baseline=baseline)
+
+    completed = tdir / "summary.json"
+    if completed.exists():
+        try:
+            previous = json.loads(completed.read_text())
+            if previous.get("status") in {"ok", "score_unavailable"}:
+                _append_run_event(
+                    out_root,
+                    "task_skip",
+                    task,
+                    baseline=baseline,
+                    status=previous["status"],
+                )
+                return previous
+        except Exception:
+            pass
+
     errors: List[str] = []
 
     cfg = task_config(
@@ -283,7 +460,7 @@ def run_task(
     effective_baseline = baseline
     effective_max_cards = max_cards
     mem_block = cfg.get("memory")
-    if baseline != "no_memory" and isinstance(mem_block, dict):
+    if baseline_spec(baseline).uses_memory and isinstance(mem_block, dict):
         effective_baseline = mem_block.get("controller", baseline)
         if "max_cards" in mem_block:
             effective_max_cards = mem_block["max_cards"]
@@ -318,21 +495,21 @@ def run_task(
             )
         ),
         "evaluator_model": os.environ.get("MARBLE_EVAL_MODEL", "") or cfg["metrics"].get("evaluate_llm", ""),
+        "retrieval": {
+            "name": retriever,
+            "max_cards": effective_max_cards,
+            "max_reads_per_step": max_reads_per_step,
+        },
+        "reward_config": {"lambda": lambda_, "beta": beta},
     }
 
     if dry_run:
         summary["status"] = "dry_run"
         (tdir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        _append_run_event(
+            out_root, "task_end", task, baseline=baseline, status=summary["status"]
+        )
         return summary
-
-    # spec §10/§11.9: never overwrite a completed episode on re-run; resume skips it
-    completed = tdir / "summary.json"
-    if completed.exists():
-        try:
-            if json.loads(completed.read_text()).get("status") == "ok":
-                return json.loads(completed.read_text())
-        except Exception:
-            pass
 
     try:
         metrics = _run_real_episode(
@@ -348,19 +525,31 @@ def run_task(
             qwen_api_key=qwen_api_key,
             qwen_api_model=qwen_api_model,
             qwen_temperature=qwen_temperature,
+            lambda_=lambda_,
+            beta=beta,
         )
         summary.update(metrics)
-        # spec §10: empty evaluator score -> mark, do not fake a zero
-        if metrics.get("task_score", 0) == 0 and not (tdir / "output.json").exists():
+        if metrics.get("score_status") != "available":
             summary["status"] = "score_unavailable"
     except Exception as exc:  # noqa: BLE001 — one bad task must not kill the sweep
         summary["status"] = "error"
         errors.append(f"{type(exc).__name__}: {exc}")
         errors.append(traceback.format_exc())
+        _append_run_event(
+            out_root,
+            "task_error",
+            task,
+            baseline=baseline,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
 
     if errors:
         (tdir / "errors.log").write_text("\n".join(errors) + "\n", encoding="utf-8")
     (tdir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    _append_run_event(
+        out_root, "task_end", task, baseline=baseline, status=summary["status"]
+    )
     return summary
 
 
@@ -391,14 +580,19 @@ def _run_real_episode(
     qwen_api_key: Optional[str] = None,
     qwen_api_model: Optional[str] = None,
     qwen_temperature: float = 0.0,
+    lambda_: float = 0.05,
+    beta: float = 0.25,
 ) -> Dict[str, Any]:
     _require_worker_key()
     import os
 
     from marble.configs.config import Config
+    from marble.experiments.evaluate import evaluate_memory_trace
+    from marble.llms import ApiUsageMeter
     from marble.memory.rewards import proposal_rewards
 
-    mem = make_governed(
+    started_at = time.monotonic()
+    mem = make_memory_runtime(
         baseline,
         # absolute: the engine chdirs into marble/ mid-run; a relative path breaks
         str((tdir / "memory_trace.jsonl").resolve()),
@@ -409,6 +603,7 @@ def _run_real_episode(
         qwen_api_key=qwen_api_key,
         qwen_api_model=qwen_api_model,
         qwen_temperature=qwen_temperature,
+        worker_model=cfg["llm"],
     )
     # ponytail: selector "top" makes agents read the top-ranked cards without an
     # extra API call, so memory actually influences the task
@@ -439,30 +634,44 @@ def _run_real_episode(
     # cwd = marble/ — chdir for the engine run, restore after.
     marble_dir = Path(__file__).resolve().parents[1]
     prev_cwd = os.getcwd()
+    usage_meter = ApiUsageMeter()
     os.chdir(marble_dir)
     try:
-        engine = EngineCls(config)
-        engine.start()
-        # spec §10: persist rejected controller outputs (redacted: no keys/prompts)
-        controller = getattr(mem, "controller", None)
-        if controller is not None and hasattr(controller, "rejections") and controller.rejections:
-            dbg = [
-                {"proposal_id": r.get("proposal_id"), "reason": r.get("reason"),
-                 "raw": r.get("raw")}
-                for r in controller.rejections
-            ]
-            (tdir / "controller_debug.jsonl").resolve().write_text(
-                "\n".join(json.dumps(x) for x in dbg) + "\n", encoding="utf-8")
-        ev = getattr(engine, "evaluator", None)
-        if ev is not None and hasattr(ev, "update"):
-            try:
-                ev.update(engine.environment, engine.agents)
-            except Exception as exc:  # noqa: BLE001 — never let scoring kill the run
-                print(f"[warn] evaluator.update failed: {exc}")
+        with usage_meter:
+            engine = EngineCls(config)
+            engine.start()
+            # spec §10: persist rejected controller outputs (redacted: no keys/prompts)
+            controller = getattr(mem, "controller", None)
+            if controller is not None and hasattr(controller, "rejections") and controller.rejections:
+                dbg = [
+                    {"proposal_id": r.get("proposal_id"), "reason": r.get("reason"),
+                     "raw": r.get("raw")}
+                    for r in controller.rejections
+                ]
+                (tdir / "controller_debug.jsonl").resolve().write_text(
+                    "\n".join(json.dumps(x) for x in dbg) + "\n", encoding="utf-8")
+            ev = getattr(engine, "evaluator", None)
+            if ev is not None and hasattr(ev, "update"):
+                try:
+                    ev.update(engine.environment, engine.agents)
+                except Exception as exc:  # noqa: BLE001 — never let scoring kill the run
+                    print(f"[warn] evaluator.update failed: {exc}")
     finally:
         os.chdir(prev_cwd)
 
-    metrics: Dict[str, Any] = {}
+    api_usage = usage_meter.snapshot()
+    metrics: Dict[str, Any] = {
+        "episode_latency_s": round(time.monotonic() - started_at, 6),
+        "worker_tokens": sum(
+            int(agent.get_token_usage())
+            for agent in getattr(engine, "agents", [])
+            if hasattr(agent, "get_token_usage")
+        ),
+        "api_calls": api_usage["api_calls"],
+        "input_tokens": api_usage["input_tokens"],
+        "output_tokens": api_usage["output_tokens"],
+        "total_tokens": api_usage["input_tokens"] + api_usage["output_tokens"],
+    }
     evaluator = getattr(engine, "evaluator", None)
     evaluator_metrics = getattr(evaluator, "metrics", None)
     if isinstance(evaluator_metrics, dict):
@@ -470,25 +679,49 @@ def _run_real_episode(
         out_path = Path(cfg["output"].get("file_path", ""))
         if out_path.exists():
             result_text = out_path.read_text(encoding="utf-8", errors="ignore")
-        # Evaluator has no 'task_score'; derive from benchmark-specific eval with
-        # task_completion mean as a lower bound
-        task_score = _benchmark_score(task.benchmark, evaluator, task.task, result_text)
-        completions = evaluator_metrics.get("task_completion", [])
-        if completions:
-            task_score = max(task_score, sum(completions) / len(completions))
-        metrics["task_score"] = task_score
+        score = _score_result(
+            task.benchmark,
+            evaluator,
+            task.task,
+            result_text,
+            getattr(engine, "environment", None),
+        )
+        metrics.update(score)
         metrics["engine_metrics"] = {
             k: v for k, v in evaluator_metrics.items() if isinstance(v, (int, float, str))
         }
+    else:
+        metrics["score_status"] = "unavailable"
 
     events = _read_jsonl(tdir / "memory_trace.jsonl")
+    memory_metrics = evaluate_memory_trace(events)
+    metrics["memory_metrics"] = memory_metrics
+    metrics["memory_cost"] = measured_memory_cost(events)
+    metrics["controller_api_calls"] = sum(
+        int(event.get("manager_api_calls", 0) or 0)
+        + int(event.get("api_calls", 0) or 0)
+        for event in events
+        if event.get("event") in {"memory_r1_operation", "memory_r1_distillation"}
+    )
+    metrics["controller_tokens"] = sum(
+        int(event.get("manager_input_tokens", 0) or 0)
+        + int(event.get("manager_output_tokens", 0) or 0)
+        + int(event.get("input_tokens", 0) or 0)
+        + int(event.get("output_tokens", 0) or 0)
+        for event in events
+        if event.get("event") in {"memory_r1_operation", "memory_r1_distillation"}
+    )
+    metrics["episode_reward"] = float(metrics.get("task_score") or 0.0) - lambda_ * metrics["memory_cost"]
     reward_kw: Dict[str, float] = {}
     if ablation:
         factor, option = parse_ablation(ablation)
         reward_kw = reward_override(factor, option)
+    effective_reward_kw = {"beta": beta, "lambda_": lambda_}
+    effective_reward_kw.update(reward_kw)
     credits = proposal_rewards(
         events, task_score=float(metrics.get("task_score", 0.0)),
-        same_task_baseline=0.0, **reward_kw
+        same_task_baseline=0.0,
+        **effective_reward_kw,
     )
     (tdir / "reward.json").write_text(json.dumps(credits, indent=2), encoding="utf-8")
     return metrics
@@ -516,48 +749,110 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
 
 
 # ------------------------------------------------------------------- scoring
-def _benchmark_score(benchmark: str, evaluator, task_content: str,
-                     result_text: str) -> float:
-    """Normalized 0..1 task score from MARBLE's per-benchmark evaluator.
-
-    ponytail: real scoring needs MARBLE's eval LLM (gpt-3.5-turbo default).
-    We call the matching evaluate_* when available and normalize its output;
-    when the eval LLM is absent we fall back to the task_completion mean.
-    is_task_completed() compares to empty ground_truth so it is usually 0.
-    """
-    m = getattr(evaluator, "metrics", {}) or {}
-    completions = m.get("task_completion", [])
-    base = sum(completions) / len(completions) if completions else 0.0
-    if not result_text:
-        return base
+def _score_result(
+    benchmark: str,
+    evaluator,
+    task_content: str,
+    result_text: str,
+    environment: Any,
+) -> Dict[str, Any]:
+    """Return only benchmark-specific, normalized and inspectable task scores."""
+    metrics = getattr(evaluator, "metrics", {}) or {}
+    if not result_text and benchmark != "bargaining":
+        return {"score_status": "unavailable", "task_score": None, "task_success": None}
     try:
         if benchmark == "research":
             evaluator.evaluate_task_research(task_content, result_text)
-            te = m.get("task_evaluation") or {}
-            vals = [v for v in te.values() if isinstance(v, (int, float))]
-            return sum(vals) / len(vals) / 5.0 if vals else base
-        elif benchmark == "minecraft":
-            evaluator.evaluate_task_world(task_content, result_text)
-            te = m.get("task_evaluation") or {}
-            vals = []
-            for side in ("buyer", "seller"):
-                vals += [v for v in (te.get(side) or {}).values()
-                         if isinstance(v, (int, float))]
-            return sum(vals) / len(vals) / 5.0 if vals else base
-        elif benchmark == "database":
-            # use whatever the engine/environment already scored; don't overwrite
-            # with empty lists (that would force 0 regardless of real result)
-            te = m.get("task_evaluation") or {}
-            rc = te.get("root_cause") or te.get("predicted")
-            return 1.0 if rc else base
-        elif benchmark == "coding":
+            values = _valid_ratings((metrics.get("task_evaluation") or {}).values())
+            return _rating_result(values)
+        if benchmark == "coding":
             evaluator.evaluate_code_quality(task_content, result_text)
-            cq = m.get("code_quality") or {}
-            vals = [v for v in cq.values() if isinstance(v, (int, float))]
-            return sum(vals) / len(vals) / 5.0 if vals else base
+            values = _valid_ratings((metrics.get("code_quality") or {}).values())
+            result = _rating_result(values)
+            if values:
+                result["task_success"] = (
+                    (metrics["code_quality"].get("executability", 0) >= 4)
+                    and (metrics["code_quality"].get("instruction_following", 0) >= 4)
+                )
+            return result
+        if benchmark == "database":
+            evaluation = metrics.get("task_evaluation") or {}
+            targets = {
+                str(value).upper()
+                for value in evaluation.get("root_cause", [])
+                if isinstance(value, str)
+            }
+            predicted_text = str(evaluation.get("predicted", result_text) or "")
+            if not targets or not predicted_text.strip():
+                return {"score_status": "unavailable", "task_score": None, "task_success": None}
+            predicted = {
+                label
+                for label in targets
+                if re.search(rf"\b{re.escape(label)}\b", predicted_text.upper())
+            }
+            overlap = len(targets & predicted)
+            score = 2 * overlap / (len(targets) + len(predicted)) if predicted else 0.0
+            return {
+                "score_status": "available",
+                "task_score": score,
+                "task_success": predicted == targets,
+                "score_detail": {"target_causes": sorted(targets), "predicted_causes": sorted(predicted)},
+            }
+        if benchmark == "bargaining":
+            evaluator.evaluate_task_world(task_content, result_text)
+            rating_values = _valid_ratings(
+                value
+                for side in (metrics.get("task_evaluation") or {}).values()
+                if isinstance(side, dict)
+                for value in side.values()
+            )
+            result = _rating_result(rating_values)
+            if result["score_status"] == "available":
+                result["task_success"] = bool(
+                    getattr(environment, "agreement_reached", False)
+                )
+            return result
+        if benchmark == "minecraft":
+            score = metrics.get("task_evaluation")
+            if isinstance(score, (int, float)) and 0 <= score <= 5:
+                return {
+                    "score_status": "available",
+                    "task_score": score / 5.0,
+                    "task_success": score > 0,
+                }
     except Exception as exc:  # noqa: BLE001 — eval LLM may be absent offline
         print(f"[warn] benchmark scoring failed ({benchmark}): {exc}")
-    return base
+        return {"score_status": "error", "task_score": None, "task_success": None}
+    return {"score_status": "unavailable", "task_score": None, "task_success": None}
+
+
+def _valid_ratings(values) -> List[float]:
+    return [
+        float(value)
+        for value in values
+        if isinstance(value, (int, float)) and 1 <= float(value) <= 5
+    ]
+
+
+def _rating_result(values: List[float]) -> Dict[str, Any]:
+    if not values:
+        return {"score_status": "unavailable", "task_score": None, "task_success": None}
+    score = sum(values) / len(values) / 5.0
+    return {
+        "score_status": "available",
+        "task_score": score,
+        "task_success": all(value >= 4 for value in values),
+    }
+
+
+def _benchmark_score(benchmark: str, evaluator, task_content: str, result_text: str) -> float:
+    """Legacy float helper retained for callers that do not consume score status."""
+    return float(
+        _score_result(benchmark, evaluator, task_content, result_text, None).get(
+            "task_score"
+        )
+        or 0.0
+    )
 
 
 # ------------------------------------------------------------------------ CLI
@@ -574,7 +869,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--max-iterations", type=int, default=None)
     ap.add_argument("--retrieval", default="key_first")
+    ap.add_argument("--max-cards", type=int, default=6)
     ap.add_argument("--max-reads-per-step", type=int, default=2)
+    ap.add_argument("--lambda", dest="lambda_", type=float, default=0.05)
+    ap.add_argument("--beta", type=float, default=0.25)
     ap.add_argument("--controller-checkpoint", default=None)
     ap.add_argument(
         "--qwen-base-model",
@@ -601,7 +899,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--worker-model", default=None, help="litellm model string for workers")
     ap.add_argument("--ablation", default=None, help="factor:option, e.g. retrieval:none")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--out", default="runs")
+    ap.add_argument(
+        "--out",
+        default=None,
+        help="explicit run root; omit to create a timestamped run under runs/",
+    )
     args = ap.parse_args(argv)
 
     # ponytail: global floor so any untimeouted raw call (arxiv fetch, requests) can't hang forever
@@ -622,7 +924,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.worker_model:
         os.environ.setdefault("MARBLE_WORKER_MODEL", args.worker_model)
 
-    # --baseline multi expands to all methods
+    # --baseline multi expands to the frozen main-method matrix.
     baselines = ["multi"] if args.baseline == "multi" else [args.baseline]
     runs = plan_runs(baselines, tasks)
 
@@ -631,7 +933,13 @@ def main(argv: Optional[List[str]] = None) -> None:
         run_id += f"_ablation-{args.ablation.replace(':', '_')}"
     if args.seed is not None:
         run_id += f"_seed{args.seed}"
-    out_root = Path(args.out) / run_id
+    run_id += f"_cards{args.max_cards}_reads{args.max_reads_per_step}"
+    run_id += f"_lambda{args.lambda_:g}_beta{args.beta:g}"
+    out_root = (
+        Path(args.out)
+        if args.out is not None
+        else _new_run_root("runs", run_id)
+    )
     print(f"{len(runs)} episode(s) -> {out_root}")
     for baseline, task in runs:
         summary = run_task(
@@ -639,6 +947,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             dry_run=args.dry_run,
             seed=args.seed,
             max_iterations=args.max_iterations,
+            max_cards=args.max_cards,
             max_reads_per_step=args.max_reads_per_step,
             retriever=args.retrieval,
             llm=args.worker_model or "",
@@ -649,6 +958,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             qwen_api_key=args.qwen_api_key,
             qwen_api_model=args.qwen_api_model,
             qwen_temperature=args.qwen_temperature,
+            lambda_=args.lambda_,
+            beta=args.beta,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 

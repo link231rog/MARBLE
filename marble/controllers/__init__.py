@@ -19,6 +19,7 @@ from .heuristic import (
     AbsentController,
     GlobalAlwaysController,
     HeuristicController,
+    LTSStyleController,
     PrivateOnlyController,
 )
 from .json_controller import VALID_VISIBILITIES, JsonController
@@ -29,6 +30,7 @@ __all__ = [
     "GlobalAlwaysController",
     "HeuristicController",
     "JsonController",
+    "LTSStyleController",
     "LocalPolicyController",
     "MemoryController",
     "PrivateOnlyController",

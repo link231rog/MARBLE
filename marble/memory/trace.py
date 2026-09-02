@@ -45,3 +45,17 @@ class TraceLogger:
             reader_id=reader_id,
             task_id=task_id,
         )
+
+    def log_exposure(
+        self,
+        memory_ids: list[str],
+        reader_id: str,
+        task_id: str,
+    ) -> None:
+        """Record ranked key cards shown before any raw memory is read."""
+        self.log(
+            "memory_exposure",
+            memory_ids=memory_ids,
+            reader_id=reader_id,
+            task_id=task_id,
+        )

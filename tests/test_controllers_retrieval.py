@@ -6,6 +6,7 @@ from marble.controllers import (
     AbsentController,
     GlobalAlwaysController,
     HeuristicController,
+    LTSStyleController,
     PrivateOnlyController,
 )
 from marble.memory import (
@@ -96,6 +97,14 @@ def test_heuristic_controller_rules() -> None:
         "private",
         "a3",
     )
+
+
+def test_lts_style_controller_is_strictly_binary() -> None:
+    controller = LTSStyleController()
+
+    assert controller.decide(proposal(title="Local scratch"), []).visibility == "absent"
+    target = controller.decide(proposal(title="Shared team decision"), [])
+    assert (target.exists, target.visibility, target.owner_id) == (True, "global", None)
 
 
 def test_retriever_ranks_and_cuts() -> None:

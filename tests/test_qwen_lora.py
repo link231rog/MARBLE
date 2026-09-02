@@ -1,4 +1,6 @@
 import json
+import sys
+from types import SimpleNamespace
 
 from marble.controllers.json_controller import VALID_VISIBILITIES
 from marble.controllers.qwen_lora import (
@@ -11,6 +13,8 @@ from marble.controllers.qwen_lora import (
     train_qwen_sft,
     weighted_completion_loss,
 )
+from marble.experiments.ablations import controller_kwargs
+from marble.llms import ApiUsageMeter
 from marble.memory.schema import MemoryProposal
 
 
@@ -25,6 +29,87 @@ def test_api_controller_decides_valid():
         [],
     )
     assert out.visibility == "global" and out.exists
+
+
+def test_api_generate_fn_records_completion_usage(monkeypatch):
+    from marble.controllers.qwen_lora import api_generate_fn
+
+    completion = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=" answer "))],
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3),
+    )
+
+    class Completions:
+        def create(self, **kwargs):
+            return completion
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=Completions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    generate = api_generate_fn("https://example.test/v1", "key", "qwen")
+
+    with ApiUsageMeter() as meter:
+        assert generate("prompt") == "answer"
+
+    assert meter.snapshot() == {
+        "api_calls": 1,
+        "input_tokens": 7,
+        "output_tokens": 3,
+    }
+
+
+def test_factory_applies_schema_drop_kwargs_to_runtime_prompt():
+    prompts = []
+    ctrl = make_qwen_lora_controller(
+        lambda prompt: prompts.append(prompt) or '{"visibility": "private", "supersedes": null}',
+        **controller_kwargs("schema_field", "title"),
+    )
+
+    out = ctrl.decide(
+        MemoryProposal(
+            proposal_id="p1",
+            task_id="t",
+            agent_id="a1",
+            source="worker",
+            title="hidden title",
+            raw_value="kept value",
+            step_index=1,
+        ),
+        [],
+    )
+
+    assert "title: hidden title" not in prompts[0]
+    assert json.loads(ctrl.last_raw) == {
+        "visibility": "private",
+        "supersedes": None,
+    }
+    assert out.visibility == "private" and out.supersedes is None
+
+
+def test_factory_applies_input_drop_kwargs_to_runtime_prompt():
+    prompts = []
+    ctrl = make_qwen_lora_controller(
+        lambda prompt: prompts.append(prompt) or '{"visibility": "global", "supersedes": null}',
+        **controller_kwargs("input", "no_topic_tags"),
+    )
+
+    ctrl.decide(
+        MemoryProposal(
+            proposal_id="p1",
+            task_id="t",
+            agent_id="a1",
+            source="worker",
+            title="shared result",
+            raw_value="x",
+            topics=("hidden-topic",),
+            step_index=1,
+        ),
+        [],
+    )
+
+    assert "hidden-topic" not in prompts[0]
 
 
 def test_export_sft_pairs_one_per_decision(tmp_path):
@@ -179,6 +264,81 @@ def test_load_qwen_rl_samples_uses_same_task_memory_credit(tmp_path):
     }]
     assert stats["decisions"] == 3
     assert stats["skipped_no_credit"] == 1
+
+
+def test_load_qwen_rl_samples_keeps_same_task_id_per_benchmark(tmp_path):
+    traces = []
+    rewards = []
+    for benchmark, benchmark_scores in (("coding", (2.0, 0.0)), ("research", (10.0, 0.0))):
+        for index, reward in enumerate(benchmark_scores):
+            trace_dir = tmp_path / benchmark / str(index)
+            trace_dir.mkdir(parents=True)
+            trace = trace_dir / "memory_trace.jsonl"
+            trace.write_text(
+                "\n".join(
+                    [
+                        json.dumps({
+                            "event": "memory_decision",
+                            "memory_id": f"{benchmark}-{index}",
+                            "controller_prompt": f"{benchmark}-{index}",
+                            "controller_output": "{}",
+                            "proposal": {"task_id": "same", "agent_id": "a", "raw_value": "fact"},
+                            "target": {"visibility": "global", "supersedes": None},
+                        }),
+                        json.dumps({
+                            "event": "memory_read",
+                            "memory_id": f"{benchmark}-{index}",
+                            "reader_id": "b",
+                        }),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            (trace_dir / "summary.json").write_text(
+                json.dumps({"benchmark": benchmark, "score_status": "available"}),
+                encoding="utf-8",
+            )
+            traces.append(str(trace))
+            rewards.append(reward)
+
+    samples, _ = load_qwen_rl_samples(traces, rewards)
+
+    assert samples[0]["advantage"] == 1.25 - 0.05 / 4096
+    assert samples[2]["advantage"] == 6.25 - 0.05 / 4096
+
+
+def test_load_qwen_rl_samples_excludes_unavailable_score_trace(tmp_path):
+    available_dir = tmp_path / "available"
+    unavailable_dir = tmp_path / "unavailable"
+    available_dir.mkdir()
+    unavailable_dir.mkdir()
+    available = available_dir / "memory_trace.jsonl"
+    unavailable = unavailable_dir / "memory_trace.jsonl"
+    event = {
+        "event": "memory_decision",
+        "memory_id": "m1",
+        "controller_prompt": "prompt",
+        "controller_output": "{}",
+        "proposal": {"task_id": "same", "agent_id": "a", "raw_value": "fact"},
+        "target": {"visibility": "global", "supersedes": None},
+    }
+    for trace in (available, unavailable):
+        trace.write_text(json.dumps(event) + "\n", encoding="utf-8")
+    (available_dir / "summary.json").write_text(
+        json.dumps({"benchmark": "coding", "score_status": "available"}),
+        encoding="utf-8",
+    )
+    (unavailable_dir / "summary.json").write_text(
+        json.dumps({"benchmark": "coding", "score_status": "unavailable"}),
+        encoding="utf-8",
+    )
+
+    samples, stats = load_qwen_rl_samples(
+        [str(available), str(unavailable), str(available)], [1.0, 100.0, 1.0]
+    )
+
+    assert len(samples) == 2
+    assert stats["decisions"] == 2
 
 
 def test_train_qwen_rl_rejects_empty_replay_before_model_import(tmp_path):

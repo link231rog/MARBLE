@@ -70,6 +70,27 @@ class PrivateOnlyController:
         )
 
 
+class LTSStyleController:
+    """Binary sharing baseline: reject local notes, publish shared findings.
+
+    This is an explicit ``absent/global`` policy and never emits private
+    memories.  It is kept separate from the proposed three-way controller.
+    """
+
+    def decide(
+        self,
+        proposal: MemoryProposal,
+        current_state: Sequence[MemoryItem],
+    ) -> MemoryTargetState:
+        if not proposal.raw_value.strip() or not _SHARED_SIGNALS.search(proposal.title):
+            return MemoryTargetState(False, "absent")
+        return MemoryTargetState(
+            True,
+            "global",
+            supersedes=_find_supersedes(proposal, current_state),
+        )
+
+
 class HeuristicController:
     """Private by default, global on shared-signal titles, absent when empty."""
 

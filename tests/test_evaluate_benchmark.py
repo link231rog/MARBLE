@@ -39,7 +39,39 @@ def test_trace_metrics_counts():
     assert m["supersessions"] == 1
     assert m["reads"] == 2 and m["cross_agent_reads"] == 1
     assert abs(m["reuse_rate"] - 2 / 3) < 1e-9
-    assert m["active_global_tokens"] == 6  # two global decisions × 3 words
+    assert m["active_global_tokens"] == 3  # superseded m1 is inactive
+    assert m["active_private_tokens"] == 3
+    assert m["active_memory_count"] == 2
+
+
+def test_trace_metrics_join_r1_crud_and_exposure_events():
+    events = [
+        {
+            "event": "memory_r1_operation",
+            "operation": "ADD",
+            "memory_id": "r1",
+            "proposal": {"raw_value": "old result"},
+        },
+        {
+            "event": "memory_r1_operation",
+            "operation": "UPDATE",
+            "memory_id": "r1",
+            "proposal": {"raw_value": "corrected shared result"},
+        },
+        {"event": "memory_exposure", "memory_ids": ["r1"], "reader_id": "a2"},
+        _read("r1", "a2"),
+    ]
+
+    m = evaluate_memory_trace(events)
+
+    assert (m["r1_adds"], m["r1_updates"], m["r1_deletes"], m["r1_noops"]) == (
+        1,
+        1,
+        0,
+        0,
+    )
+    assert m["exposure_events"] == m["exposed_cards"] == 1
+    assert m["active_global_tokens"] == 3
 
 
 def test_empty_trace_defaults():
@@ -53,7 +85,10 @@ def test_task_dir_join(tmp_path):
     tdir.mkdir(parents=True)
     (tdir / "summary.json").write_text(json.dumps(
         {"method": "heuristic", "benchmark": "coding", "task_id": 5,
-         "seed": 1, "status": "ok", "task_score": 0.8}))
+         "seed": 1, "status": "ok", "task_score": 0.8,
+         "task_success": 1.0, "score_status": "available",
+         "episode_latency_s": 2.5, "api_calls": 6,
+         "total_tokens": 120, "episode_reward": 0.7}))
     (tdir / "memory_trace.jsonl").write_text("\n".join(
         json.dumps(e) for e in [_decision("m1", "a1", "global"), _read("m1", "a2")]))
     (tdir / "reward.json").write_text(json.dumps({"m1": 1.2}))
@@ -61,15 +96,24 @@ def test_task_dir_join(tmp_path):
     assert row["method"] == "heuristic" and row["task_score"] == 0.8
     assert row["memory"]["reads"] == 1
     assert row["reward"] == 1.2
+    assert row["task_success"] == 1.0
+    assert row["api_calls"] == 6
+    assert row["episode_reward"] == 0.7
 
 
 def test_run_root_walk_and_aggregation(tmp_path):
-    for method, score in (("heuristic", 0.8), ("heuristic", 0.6), ("no_memory", 0.5)):
+    for method, score, score_status in (
+        ("heuristic", 0.8, "available"),
+        ("heuristic", 0.6, "available"),
+        ("heuristic", 100.0, "unavailable"),
+        ("no_memory", 0.5, "available"),
+    ):
         tdir = tmp_path / "coding" / method / str(score)
         tdir.mkdir(parents=True)
         (tdir / "summary.json").write_text(json.dumps(
             {"method": method, "benchmark": "coding", "task_id": 1,
-             "seed": None, "status": "ok", "task_score": score}))
+             "seed": None, "status": "ok", "task_score": score,
+             "score_status": score_status}))
     rows = evaluate_run_root(tmp_path)
     assert len(rows) == 3
     agg = aggregate_by_method(rows)
@@ -77,6 +121,14 @@ def test_run_root_walk_and_aggregation(tmp_path):
     assert agg["no_memory"]["task_score"] == 0.5
     assert agg["heuristic"]["task_score_se"] > 0
     assert agg["no_memory"]["task_score_se"] == 0.0
+
+    diagnostic_rows = evaluate_run_root(tmp_path, include_unavailable=True)
+    assert len(diagnostic_rows) == 4
+    diagnostic_agg = aggregate_by_method(
+        diagnostic_rows,
+        include_unavailable=True,
+    )
+    assert abs(diagnostic_agg["heuristic"]["task_score"] - 33.8) < 1e-9
 
 
 def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):
@@ -86,9 +138,10 @@ def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):
         tdir.mkdir(parents=True)
         (tdir / "summary.json").write_text(json.dumps(
             {"method": baseline, "benchmark": "coding", "task_id": 1,
-             "seed": None, "status": "dry_run", "task_score": 0.0}))
+             "seed": None, "status": "dry_run", "task_score": 0.0,
+             "score_status": "unavailable"}))
         (tdir / "memory_trace.jsonl").write_text("")
-    main(["--run-dir", str(tmp_path)])
+    main(["--run-dir", str(tmp_path), "--include-unavailable"])
     out = json.loads(capsys.readouterr().out)
     assert sorted(out) == ["heuristic", "no_memory"]
     assert out["heuristic"]["memory.decisions_total"] == 0.0

@@ -80,27 +80,57 @@ def format_report(report: Dict[str, Any]) -> str:
 def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Memory metrics from one memory_trace.jsonl (spec §13)."""
     decisions = [e for e in events if e.get("event") == "memory_decision"]
+    r1_operations = [
+        e for e in events if e.get("event") == "memory_r1_operation"
+    ]
     stored = [e for e in decisions if e.get("memory_id")]
     total = len(stored)
     by_vis: Dict[str, int] = {"private": 0, "global": 0, "absent": 0}
     owners: Dict[str, str] = {}
     superseded_ids = set()
-    global_raw_tokens = 0
+    active_items: Dict[str, Dict[str, Any]] = {}
     for e in stored:
         vis = e["target"].get("visibility")
         by_vis[vis] = by_vis.get(vis, 0) + 1
         owners[e["memory_id"]] = e["proposal"]["agent_id"]
         if e["target"].get("supersedes"):
             superseded_ids.add(e["target"]["supersedes"])
-        if vis == "global":
-            global_raw_tokens += token_count(e["proposal"].get("raw_value", ""))
+        memory_id = e["memory_id"]
+        active_items[memory_id] = {
+            "visibility": vis,
+            "tokens": token_count(e["proposal"].get("raw_value", "")),
+        }
+        if e["target"].get("supersedes"):
+            active_items.pop(e["target"]["supersedes"], None)
+    for e in r1_operations:
+        operation = e.get("operation")
+        memory_id = e.get("memory_id")
+        if not isinstance(memory_id, str):
+            continue
+        if operation in {"ADD", "UPDATE"}:
+            proposal = e.get("proposal") or {}
+            if isinstance(proposal.get("agent_id"), str):
+                owners[memory_id] = proposal["agent_id"]
+            active_items[memory_id] = {
+                "visibility": "global",
+                "tokens": token_count(proposal.get("raw_value", "")),
+            }
+        elif operation == "DELETE":
+            active_items.pop(memory_id, None)
     reads = [
         e for e in events
         if e.get("event") == "memory_read" and isinstance(e.get("memory_id"), str)
     ]
+    exposures = [e for e in events if e.get("event") == "memory_exposure"]
     cross = sum(1 for e in reads if owners.get(e["memory_id"]) != e.get("reader_id"))
     read_ids = {e["memory_id"] for e in reads if e.get("memory_id")}
     reused = sum(1 for mid in read_ids if mid in owners)
+    active_global = [
+        item for item in active_items.values() if item["visibility"] == "global"
+    ]
+    active_private = [
+        item for item in active_items.values() if item["visibility"] == "private"
+    ]
     return {
         "decisions_total": total,
         "accept_rate": (total / len(decisions)) if decisions else 0.0,
@@ -110,12 +140,25 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "private": by_vis.get("private", 0),
         "global": by_vis.get("global", 0),
         "supersessions": len(superseded_ids),
+        "r1_adds": sum(1 for e in r1_operations if e.get("operation") == "ADD"),
+        "r1_updates": sum(1 for e in r1_operations if e.get("operation") == "UPDATE"),
+        "r1_deletes": sum(1 for e in r1_operations if e.get("operation") == "DELETE"),
+        "r1_noops": sum(1 for e in r1_operations if e.get("operation") == "NOOP"),
+        "exposure_events": len(exposures),
+        "exposed_cards": sum(
+            len(e.get("memory_ids", []))
+            for e in exposures
+            if isinstance(e.get("memory_ids"), list)
+        ),
         "reads": len(reads),
         "cross_agent_reads": cross,
         "reuse_rate": (reused / total) if total else 0.0,
-        # ponytail: counts raw tokens of every global decision; subtracting
-        # superseded ones needs per-item lifecycle joins — do it here when needed
-        "active_global_tokens": global_raw_tokens,
+        "active_memory_count": len(active_items),
+        "active_global_count": len(active_global),
+        "active_private_count": len(active_private),
+        "active_memory_tokens": sum(item["tokens"] for item in active_items.values()),
+        "active_global_tokens": sum(item["tokens"] for item in active_global),
+        "active_private_tokens": sum(item["tokens"] for item in active_private),
     }
 
 
@@ -131,6 +174,16 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         "seed": summary.get("seed"),
         "status": summary.get("status"),
         "task_score": summary.get("task_score", 0.0),
+        "task_success": summary.get("task_success"),
+        "score_status": summary.get("score_status", "unavailable"),
+        "episode_latency_s": summary.get("episode_latency_s"),
+        "worker_tokens": summary.get("worker_tokens"),
+        "api_calls": summary.get("api_calls"),
+        "total_tokens": summary.get("total_tokens"),
+        "controller_api_calls": summary.get("controller_api_calls"),
+        "controller_tokens": summary.get("controller_tokens"),
+        "memory_cost": summary.get("memory_cost"),
+        "episode_reward": summary.get("episode_reward"),
         "memory": evaluate_memory_trace(
             _read_jsonl(os.path.join(task_dir, "memory_trace.jsonl"))
         ),
@@ -143,17 +196,27 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
     return row
 
 
-def evaluate_run_root(run_root: str | os.PathLike) -> List[Dict[str, Any]]:
-    """All task rows under runs/<run_id>/<benchmark>/<task_id>/."""
+def evaluate_run_root(
+    run_root: str | os.PathLike,
+    *,
+    include_unavailable: bool = False,
+) -> List[Dict[str, Any]]:
+    """Task rows under runs/<run_id>/<benchmark>/<task_id>/."""
     root = os.fspath(run_root)
     rows: List[Dict[str, Any]] = []
     for dirpath, dirnames, filenames in os.walk(root):
         if "summary.json" in filenames:
-            rows.append(evaluate_task_dir(dirpath))
+            row = evaluate_task_dir(dirpath)
+            if include_unavailable or row.get("score_status") == "available":
+                rows.append(row)
     return rows
 
 
-def aggregate_by_method(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+def aggregate_by_method(
+    rows: List[Dict[str, Any]],
+    *,
+    include_unavailable: bool = False,
+) -> Dict[str, Dict[str, float]]:
     """mean ± standard error per method over numeric leaf metrics."""
     import math
 
@@ -168,6 +231,8 @@ def aggregate_by_method(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, float
 
     grouped: Dict[str, List[Dict[str, float]]] = {}
     for r in rows:
+        if not include_unavailable and r.get("score_status") != "available":
+            continue
         grouped.setdefault(str(r["method"]), []).append(leaves(r))
     report: Dict[str, Dict[str, float]] = {}
     for method, metric_dicts in sorted(grouped.items()):
@@ -193,6 +258,11 @@ def main(argv: List[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description="Evaluate governed-memory baselines.")
     parser.add_argument("--run-dir", required=True, help="coding_rollout run dir OR run_root")
+    parser.add_argument(
+        "--include-unavailable",
+        action="store_true",
+        help="include rows whose score is unavailable for diagnostics",
+    )
     args = parser.parse_args(argv)
 
     # any summary.json below the root that is not the legacy root-level one
@@ -202,8 +272,17 @@ def main(argv: List[str] | None = None) -> None:
         if os.path.abspath(p) != legacy
     ]
     if nested:
-        rows = evaluate_run_root(args.run_dir)
-        print(json.dumps(aggregate_by_method(rows), indent=2))
+        rows = evaluate_run_root(
+            args.run_dir,
+            include_unavailable=args.include_unavailable,
+        )
+        print(json.dumps(
+            aggregate_by_method(
+                rows,
+                include_unavailable=args.include_unavailable,
+            ),
+            indent=2,
+        ))
     else:
         print(format_report(evaluate_run(args.run_dir)))
 
