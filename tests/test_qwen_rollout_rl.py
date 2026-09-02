@@ -69,12 +69,17 @@ def test_train_fresh_rollouts_passes_seed_to_rollout_and_rl(tmp_path, monkeypatc
     initial = tmp_path / "initial"
     _complete_checkpoint(initial)
     observed = {}
+    manifest = tmp_path / "frozen.json"
+    manifest.write_text("{}", encoding="utf-8")
     tasks = [SimpleNamespace(task_id=1, benchmark="coding")]
-    monkeypatch.setattr(qwen_rollout_rl, "load_tasks", lambda *args, **kwargs: tasks)
+    monkeypatch.setattr(
+        qwen_rollout_rl, "load_manifest_tasks", lambda *args, **kwargs: tasks
+    )
     monkeypatch.setattr(qwen_rollout_rl, "_apply_split", lambda value, split: value)
 
     def collect(*args, **kwargs):
         observed["collect_seed"] = kwargs["seed"]
+        observed["collect_manifest"] = kwargs["manifest"]
         return ["trace-a", "trace-b"], [1.0, 0.5], []
 
     def train(*args, **kwargs):
@@ -84,9 +89,14 @@ def test_train_fresh_rollouts_passes_seed_to_rollout_and_rl(tmp_path, monkeypatc
     monkeypatch.setattr(qwen_rollout_rl, "collect_rollouts", collect)
     monkeypatch.setattr(qwen_rollout_rl, "train_qwen_rl", train)
     qwen_rollout_rl.train_fresh_rollouts(
-        "coding", str(initial), str(tmp_path / "training"), seed=42
+        "coding", str(initial), str(tmp_path / "training"), seed=42,
+        manifest=str(manifest),
     )
-    assert observed == {"collect_seed": 42, "train_seed": 42}
+    assert observed == {
+        "collect_seed": 42,
+        "collect_manifest": str(manifest),
+        "train_seed": 42,
+    }
 
 
 def test_resume_uses_checkpoint_from_training_manifest(tmp_path, monkeypatch):

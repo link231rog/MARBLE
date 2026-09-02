@@ -120,6 +120,7 @@ def collect_rollouts(
     _lambda: Optional[float] = None,
     beta: Optional[float] = None,
     seed: int = 42,
+    manifest: Optional[str] = None,
 ) -> tuple[List[str], List[float], List[Dict[str, Any]]]:
     """Collect independent episodes from the current controller checkpoint."""
     if rollouts_per_task < 2:
@@ -149,6 +150,7 @@ def collect_rollouts(
                 max_cards=max_cards if max_cards is not None else 6,
                 lambda_=_lambda if _lambda is not None else 0.05,
                 beta=beta if beta is not None else 0.25,
+                manifest=manifest,
             )
             # Prefer canonical ours_sft directory, fall back to legacy qwen_sft
             ours_trace = (
@@ -318,6 +320,7 @@ def train_fresh_rollouts(
                 _lambda=_lambda,
                 beta=beta,
                 seed=seed,
+                manifest=manifest,
             )
             _atomic_write_json(
                 round_manifest_path,

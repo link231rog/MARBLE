@@ -101,6 +101,42 @@ def test_task_dir_join(tmp_path):
     assert row["episode_reward"] == 0.7
 
 
+def test_task_metadata_and_setting_are_preserved(tmp_path):
+    tdir = tmp_path / "database" / "4"
+    tdir.mkdir(parents=True)
+    summary = {
+        "method": "ours_rl", "benchmark": "database", "task_id": 4,
+        "agent_count": 5, "seed": 42, "status": "ok",
+        "ablation": "input:no_task_goal", "manifest": "frozen.json",
+        "setting": "method=ours_rl|ablation=input:no_task_goal",
+        "retrieval": {"name": "key_first", "max_cards": 3,
+                      "max_reads_per_step": 2},
+        "reward_config": {"lambda": 0.05, "beta": 0.25},
+        "task_score": 0.9, "score_status": "available",
+    }
+    (tdir / "summary.json").write_text(json.dumps(summary))
+    row = evaluate_task_dir(tdir)
+    assert row["agent_count"] == 5
+    assert row["setting"] == summary["setting"]
+    assert row["ablation"] == "input:no_task_goal"
+    assert row["manifest"] == "frozen.json"
+    assert row["retrieval"]["max_cards"] == 3
+
+
+def test_agent_count_metadata_supports_three_four_five_agents(tmp_path):
+    for count in (3, 4, 5):
+        tdir = tmp_path / str(count)
+        tdir.mkdir()
+        (tdir / "summary.json").write_text(json.dumps({
+            "method": "ours_rl", "benchmark": "research", "task_id": count,
+            "agent_count": count, "seed": 42, "setting": f"agents={count}",
+            "status": "ok", "task_score": 0.5, "score_status": "available",
+        }))
+        row = evaluate_task_dir(tdir)
+        assert row["agent_count"] == count
+        assert row["setting"] == f"agents={count}"
+
+
 def test_run_root_walk_and_aggregation(tmp_path):
     for method, score, score_status in (
         ("heuristic", 0.8, "available"),
@@ -129,6 +165,23 @@ def test_run_root_walk_and_aggregation(tmp_path):
         include_unavailable=True,
     )
     assert abs(diagnostic_agg["heuristic"]["task_score"] - 33.8) < 1e-9
+
+
+def test_aggregation_keeps_settings_separate(tmp_path):
+    for cards, score in ((1, 0.2), (6, 0.8)):
+        tdir = tmp_path / "run" / "ours_rl" / "database" / str(cards)
+        tdir.mkdir(parents=True)
+        (tdir / "summary.json").write_text(json.dumps({
+            "method": "ours_rl", "benchmark": "database", "task_id": cards,
+            "agent_count": 4, "seed": 42, "status": "ok",
+            "task_score": score, "score_status": "available",
+            "setting": f"method=ours_rl|max_cards={cards}",
+        }))
+    rows = evaluate_run_root(tmp_path)
+    agg = aggregate_by_method(rows)
+    assert set(agg) == {"method=ours_rl|max_cards=1", "method=ours_rl|max_cards=6"}
+    assert agg["method=ours_rl|max_cards=1"]["task_score"] == 0.2
+    assert agg["method=ours_rl|max_cards=6"]["task_score"] == 0.8
 
 
 def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):

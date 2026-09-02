@@ -8,6 +8,29 @@ import os
 from typing import Any, Dict, List
 
 
+def setting_key(summary: Dict[str, Any]) -> str:
+    """Return the explicit experiment setting, with legacy method fallback."""
+    explicit = summary.get("setting")
+    if explicit:
+        return str(explicit)
+    method = summary.get("method")
+    if not any(key in summary for key in ("ablation", "retrieval", "reward_config")):
+        return str(method)
+    retrieval = summary.get("retrieval") or {}
+    reward = summary.get("reward_config") or {}
+    return "|".join(
+        (
+            f"method={method}",
+            f"ablation={summary.get('ablation') or 'none'}",
+            f"retrieval={retrieval.get('name', 'unknown')}",
+            f"max_cards={retrieval.get('max_cards', 'unknown')}",
+            f"max_reads_per_step={retrieval.get('max_reads_per_step', 'unknown')}",
+            f"lambda={reward.get('lambda', 'unknown')}",
+            f"beta={reward.get('beta', 'unknown')}",
+        )
+    )
+
+
 def _read_jsonl(path: str) -> List[Dict[str, Any]]:
     if not os.path.exists(path):
         return []
@@ -169,9 +192,13 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         summary = json.load(fh)
     row: Dict[str, Any] = {
         "method": summary.get("method"),
+        "setting": setting_key(summary),
         "benchmark": summary.get("benchmark"),
         "task_id": summary.get("task_id"),
+        "agent_count": summary.get("agent_count"),
         "seed": summary.get("seed"),
+        "ablation": summary.get("ablation"),
+        "manifest": summary.get("manifest"),
         "status": summary.get("status"),
         "task_score": summary.get("task_score", 0.0),
         "task_success": summary.get("task_success"),
@@ -184,6 +211,8 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         "controller_tokens": summary.get("controller_tokens"),
         "memory_cost": summary.get("memory_cost"),
         "episode_reward": summary.get("episode_reward"),
+        "retrieval": summary.get("retrieval", {}),
+        "reward_config": summary.get("reward_config", {}),
         "memory": evaluate_memory_trace(
             _read_jsonl(os.path.join(task_dir, "memory_trace.jsonl"))
         ),
@@ -233,7 +262,7 @@ def aggregate_by_method(
     for r in rows:
         if not include_unavailable and r.get("score_status") != "available":
             continue
-        grouped.setdefault(str(r["method"]), []).append(leaves(r))
+        grouped.setdefault(str(r.get("setting") or r["method"]), []).append(leaves(r))
     report: Dict[str, Dict[str, float]] = {}
     for method, metric_dicts in sorted(grouped.items()):
         keys = set().union(*(d.keys() for d in metric_dicts))

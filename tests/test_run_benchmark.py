@@ -219,6 +219,9 @@ def test_dry_run_writes_layout_without_engine(tmp_path):
     on_disk = json.loads((tdir / "summary.json").read_text())
     assert on_disk["status"] == "dry_run"
     assert on_disk["method"] == "heuristic" and on_disk["seed"] == 7
+    assert on_disk["agent_count"] == len(t.agents)
+    assert on_disk["ablation"] is None and on_disk["manifest"] is None
+    assert on_disk["setting"].startswith("method=heuristic|ablation=none|")
     assert summary["status"] == "dry_run"
     # spec §11.2/§11.3: model names recorded, all non-empty
     assert on_disk["worker_model"] and on_disk["controller_model"] == "heuristic"

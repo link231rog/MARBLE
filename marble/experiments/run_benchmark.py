@@ -422,6 +422,7 @@ def run_task(
     qwen_temperature: float = 0.0,
     lambda_: float = 0.05,
     beta: float = 0.25,
+    manifest: Optional[str] = None,
 ) -> Dict[str, Any]:
     if lambda_ < 0:
         raise ValueError("lambda must be non-negative")
@@ -477,7 +478,10 @@ def run_task(
         "method": baseline,
         "benchmark": task.benchmark,
         "task_id": task.task_id,
+        "agent_count": len(task.agents),
         "seed": seed,
+        "ablation": ablation,
+        "manifest": manifest,
         "status": "ok",
         # spec §11.2/§11.3: record the exact models used, all non-empty
         "worker_model": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
@@ -503,6 +507,17 @@ def run_task(
         },
         "reward_config": {"lambda": lambda_, "beta": beta},
     }
+    summary["setting"] = "|".join(
+        (
+            f"method={baseline}",
+            f"ablation={ablation or 'none'}",
+            f"retrieval={retriever}",
+            f"max_cards={effective_max_cards}",
+            f"max_reads_per_step={max_reads_per_step}",
+            f"lambda={lambda_:g}",
+            f"beta={beta:g}",
+        )
+    )
 
     if dry_run:
         summary["status"] = "dry_run"
@@ -979,6 +994,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             qwen_temperature=args.qwen_temperature,
             lambda_=args.lambda_,
             beta=args.beta,
+            manifest=args.manifest,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 
