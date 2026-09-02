@@ -1,4 +1,7 @@
 import time
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -14,6 +17,38 @@ from marble.environments.research_utils.paper_collector import (
 from marble.environments.research_utils.profile_collector import (
     collect_publications_and_coauthors,
 )
+
+
+def _to_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {
+            str(key): _to_jsonable(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_to_jsonable(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return _to_jsonable(asdict(value))
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _to_jsonable(model_dump(exclude_none=True))
+    to_dict = getattr(value, "dict", None)
+    if callable(to_dict):
+        return _to_jsonable(to_dict(exclude_none=True))
+    if hasattr(value, "__dict__"):
+        return _to_jsonable(vars(value))
+    return str(value)
+
+
+def _serialize_paper(paper: Any) -> Dict[str, Any]:
+    """Serialize Paper and arxiv.Result objects at the tool boundary."""
+    return _to_jsonable(paper)
 
 
 class ResearchEnvironment(BaseEnvironment):
@@ -246,7 +281,7 @@ class ResearchEnvironment(BaseEnvironment):
             )
             return {
                 "success": True,
-                "papers": [paper.model_dump(exclude_none=True) for paper in papers],
+                "papers": [_serialize_paper(paper) for paper in papers],
             }
         except ValueError as e:
             return {"success": False, "error-msg": str(e)}
@@ -268,7 +303,7 @@ class ResearchEnvironment(BaseEnvironment):
             papers = get_recent_papers(domain=domain, max_results=max_results)
             return {
                 "success": True,
-                "papers": [paper.model_dump(exclude_none=True) for paper in papers],
+                "papers": [_serialize_paper(paper) for paper in papers],
             }
         except ValueError as e:
             return {"success": False, "error-msg": str(e)}
@@ -331,7 +366,7 @@ class ResearchEnvironment(BaseEnvironment):
             )
             return {
                 "success": True,
-                "papers": [paper.model_dump(exclude_none=True) for paper in papers],
+                "papers": [_serialize_paper(paper) for paper in papers],
             }
         except ValueError as e:
             return {"success": False, "error-msg": str(e)}
@@ -349,7 +384,7 @@ class ResearchEnvironment(BaseEnvironment):
         try:
             paper = get_paper_by_arxiv_id(arxiv_id=arxiv_id)
             if paper:
-                return {"success": True, "paper": paper.model_dump(exclude_none=True)}
+                return {"success": True, "paper": _serialize_paper(paper)}
             else:
                 return {"success": False, "error-msg": "Paper not found."}
         except ValueError as e:
@@ -368,7 +403,7 @@ class ResearchEnvironment(BaseEnvironment):
         try:
             paper = get_paper_by_title(title=title)
             if paper:
-                return {"success": True, "paper": paper.model_dump(exclude_none=True)}
+                return {"success": True, "paper": _serialize_paper(paper)}
             else:
                 return {"success": False, "error-msg": "Paper not found."}
         except ValueError as e:
