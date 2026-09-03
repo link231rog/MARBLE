@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "seed": 42,
+  "setting": "hard_stratified_evaluation",
+  "benchmarks": ["database", "research"],
+  "description": "Stratified Hard Evaluation Set with strictly orthogonal train and test tasks.",
+  "splits": {
+    "train_hard": [
+      {"benchmark": "database", "task_id": 51, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 52, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "database", "task_id": 53, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "research", "task_id": 10, "agent_count": 5, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 11, "agent_count": 5, "category": "extreme_agent_count_coordination"},
+      {"benchmark": "research", "task_id": 15, "agent_count": 5, "category": "cross_disciplinary_high_coordination"}
+    ],
+    "test_hard": [
+      {"benchmark": "database", "task_id": 54, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 55, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "database", "task_id": 56, "agent_count": 5, "root_causes": ["FETCH_LARGE_DATA", "INSERT_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 57, "agent_count": 5, "root_causes": ["INSERT_LARGE_DATA", "LOCK_CONTENTION"]},
+      {"benchmark": "research", "task_id": 18, "agent_count": 5, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 20, "agent_count": 5, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 26, "agent_count": 5, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 51, "agent_count": 5, "category": "large_team_heterogeneous_coordination"}
+    ]
+  }
+}

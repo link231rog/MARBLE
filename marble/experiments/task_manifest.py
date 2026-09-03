@@ -74,16 +74,35 @@ def build_frozen_manifest(tasks: Iterable[Any], *, seed: int = 42) -> tuple[list
 def load_manifest_tasks(path: str | Path, *, split: str = "all") -> list[Any]:
     """Load only the benchmark tasks named by a frozen manifest."""
     payload = read_manifest(path)
-    if split not in {"all", "train", "test"}:
-        raise ValueError("manifest split must be all|train|test")
+    valid_splits = {
+        "all",
+        "train",
+        "test",
+        "train_standard",
+        "train_hard",
+        "test_standard",
+        "test_hard",
+    }
+    if split not in valid_splits:
+        raise ValueError(f"manifest split must be one of {sorted(valid_splits)}")
     records: list[dict[str, Any]] = []
     if "splits" in payload:
+        splits_dict = payload["splits"]
         if split == "all":
-            records = list(payload["splits"].get("train", [])) + list(
-                payload["splits"].get("test", [])
+            for s_name in ("train", "test", "train_standard", "train_hard", "test_standard", "test_hard"):
+                for item in splits_dict.get(s_name, []):
+                    if item not in records:
+                        records.append(item)
+        elif split in splits_dict:
+            records = list(splits_dict[split])
+        elif split == "train":
+            records = list(splits_dict.get("train", [])) or (
+                list(splits_dict.get("train_standard", [])) + list(splits_dict.get("train_hard", []))
             )
-        else:
-            records = list(payload["splits"].get(split, []))
+        elif split == "test":
+            records = list(splits_dict.get("test", [])) or (
+                list(splits_dict.get("test_standard", [])) + list(splits_dict.get("test_hard", []))
+            )
     else:
         records = list(payload.get("tasks", []))
     from marble.benchmarks import load_tasks
@@ -93,8 +112,9 @@ def load_manifest_tasks(path: str | Path, *, split: str = "all") -> list[Any]:
         by_benchmark.setdefault(str(record["benchmark"]), []).append(
             int(record["task_id"])
         )
-        if int(record.get("agent_count", 3)) not in {3, 4, 5}:
-            raise ValueError("manifest contains an unsupported agent count")
+        cnt = int(record.get("agent_count", 3))
+        if cnt < 1 or cnt > 30:
+            raise ValueError(f"manifest contains an unsupported agent count: {cnt}")
     result: list[Any] = []
     for benchmark in sorted(by_benchmark):
         result.extend(load_tasks(benchmark, task_ids=by_benchmark[benchmark]))

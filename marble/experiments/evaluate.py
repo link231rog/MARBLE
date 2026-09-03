@@ -235,18 +235,40 @@ def evaluate_run_root(
     split: str = "all",
 ) -> List[Dict[str, Any]]:
     """Task rows under runs/<run_id>/<benchmark>/<task_id>/."""
-    if split not in {"all", "train", "test"}:
-        raise ValueError("manifest split must be all|train|test")
+    valid_splits = {
+        "all",
+        "train",
+        "test",
+        "train_standard",
+        "train_hard",
+        "test_standard",
+        "test_hard",
+    }
+    if split not in valid_splits:
+        raise ValueError(f"manifest split must be one of {sorted(valid_splits)}")
     allowed = None
     if manifest is not None:
         payload = read_manifest(manifest)
         if "splits" in payload:
-            records = (
-                list(payload["splits"].get("train", []))
-                + list(payload["splits"].get("test", []))
-                if split == "all"
-                else list(payload["splits"].get(split, []))
-            )
+            splits_dict = payload["splits"]
+            if split == "all":
+                records = []
+                for s_name in ("train", "test", "train_standard", "train_hard", "test_standard", "test_hard"):
+                    for item in splits_dict.get(s_name, []):
+                        if item not in records:
+                            records.append(item)
+            elif split in splits_dict:
+                records = list(splits_dict[split])
+            elif split == "train":
+                records = list(splits_dict.get("train", [])) or (
+                    list(splits_dict.get("train_standard", [])) + list(splits_dict.get("train_hard", []))
+                )
+            elif split == "test":
+                records = list(splits_dict.get("test", [])) or (
+                    list(splits_dict.get("test_standard", [])) + list(splits_dict.get("test_hard", []))
+                )
+            else:
+                records = []
         else:
             records = list(payload.get("tasks", []))
         allowed = {

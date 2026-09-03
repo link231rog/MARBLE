@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "seed": 42,
+  "setting": "stratified_2x2_orthogonal_benchmark",
+  "benchmarks": ["database", "research"],
+  "description": "Stratified 2x2 Orthogonal Benchmark ensuring strict distribution alignment and zero data leakage.",
+  "splits": {
+    "train_standard": [
+      {"benchmark": "database", "task_id": 1, "agent_count": 5},
+      {"benchmark": "database", "task_id": 2, "agent_count": 5},
+      {"benchmark": "database", "task_id": 3, "agent_count": 5},
+      {"benchmark": "research", "task_id": 1, "agent_count": 5},
+      {"benchmark": "research", "task_id": 3, "agent_count": 3},
+      {"benchmark": "research", "task_id": 4, "agent_count": 4}
+    ],
+    "train_hard": [
+      {"benchmark": "database", "task_id": 51, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 52, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "database", "task_id": 53, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "research", "task_id": 10, "agent_count": 8, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 11, "agent_count": 22, "category": "extreme_agent_count_coordination"},
+      {"benchmark": "research", "task_id": 15, "agent_count": 9, "category": "cross_disciplinary_high_coordination"}
+    ],
+    "test_standard": [
+      {"benchmark": "database", "task_id": 4, "agent_count": 5},
+      {"benchmark": "database", "task_id": 5, "agent_count": 5},
+      {"benchmark": "database", "task_id": 6, "agent_count": 5},
+      {"benchmark": "database", "task_id": 7, "agent_count": 5},
+      {"benchmark": "research", "task_id": 2, "agent_count": 5},
+      {"benchmark": "research", "task_id": 5, "agent_count": 3},
+      {"benchmark": "research", "task_id": 6, "agent_count": 3},
+      {"benchmark": "research", "task_id": 7, "agent_count": 4}
+    ],
+    "test_hard": [
+      {"benchmark": "database", "task_id": 54, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 55, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "database", "task_id": 56, "agent_count": 5, "root_causes": ["FETCH_LARGE_DATA", "INSERT_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 57, "agent_count": 5, "root_causes": ["INSERT_LARGE_DATA", "LOCK_CONTENTION"]},
+      {"benchmark": "research", "task_id": 18, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 20, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 26, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 51, "agent_count": 11, "category": "large_team_heterogeneous_coordination"}
+    ],
+    "train": [
+      {"benchmark": "database", "task_id": 1, "agent_count": 5},
+      {"benchmark": "database", "task_id": 2, "agent_count": 5},
+      {"benchmark": "database", "task_id": 3, "agent_count": 5},
+      {"benchmark": "research", "task_id": 1, "agent_count": 5},
+      {"benchmark": "research", "task_id": 3, "agent_count": 3},
+      {"benchmark": "research", "task_id": 4, "agent_count": 4},
+      {"benchmark": "database", "task_id": 51, "agent_count": 5},
+      {"benchmark": "database", "task_id": 52, "agent_count": 5},
+      {"benchmark": "database", "task_id": 53, "agent_count": 5},
+      {"benchmark": "research", "task_id": 10, "agent_count": 8},
+      {"benchmark": "research", "task_id": 11, "agent_count": 22},
+      {"benchmark": "research", "task_id": 15, "agent_count": 9}
+    ],
+    "test": [
+      {"benchmark": "database", "task_id": 4, "agent_count": 5},
+      {"benchmark": "database", "task_id": 5, "agent_count": 5},
+      {"benchmark": "database", "task_id": 6, "agent_count": 5},
+      {"benchmark": "database", "task_id": 7, "agent_count": 5},
+      {"benchmark": "research", "task_id": 2, "agent_count": 5},
+      {"benchmark": "research", "task_id": 5, "agent_count": 3},
+      {"benchmark": "research", "task_id": 6, "agent_count": 3},
+      {"benchmark": "research", "task_id": 7, "agent_count": 4},
+      {"benchmark": "database", "task_id": 54, "agent_count": 5},
+      {"benchmark": "database", "task_id": 55, "agent_count": 5},
+      {"benchmark": "database", "task_id": 56, "agent_count": 5},
+      {"benchmark": "database", "task_id": 57, "agent_count": 5},
+      {"benchmark": "research", "task_id": 18, "agent_count": 7},
+      {"benchmark": "research", "task_id": 20, "agent_count": 7},
+      {"benchmark": "research", "task_id": 26, "agent_count": 7},
+      {"benchmark": "research", "task_id": 51, "agent_count": 11}
+    ]
+  }
+}
