@@ -48,7 +48,11 @@ def _to_jsonable(value: Any) -> Any:
 
 def _serialize_paper(paper: Any) -> Dict[str, Any]:
     """Serialize Paper and arxiv.Result objects at the tool boundary."""
-    return _to_jsonable(paper)
+    data = _to_jsonable(paper)
+    if isinstance(data, dict):
+        for key in ("sections", "embed", "bibliography", "references", "table_captions", "figure_captions"):
+            data.pop(key, None)
+    return data
 
 
 class ResearchEnvironment(BaseEnvironment):

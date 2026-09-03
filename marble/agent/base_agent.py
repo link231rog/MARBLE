@@ -610,7 +610,11 @@ class BaseAgent:
 
         # Retrieve all memory entries for this agent
         memory_str = self.memory.get_memory_str()
-        task_history_str = ", ".join(self.task_history)
+        if len(memory_str) > 8000:
+            memory_str = memory_str[-8000:]
+        task_history_str = ", ".join(self.task_history[-5:])
+        if len(task_history_str) > 6000:
+            task_history_str = task_history_str[-6000:]
 
         # Incorporate agent's profile/persona in decision making
         persona = self.get_profile()

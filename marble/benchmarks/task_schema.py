@@ -20,3 +20,4 @@ class BenchmarkTask:
     engine_planner: dict = field(default_factory=dict)
     output: dict = field(default_factory=dict)
     llm: str = ""  # model string for workers (e.g. '', 'gpt-4o-mini')
+    task_data: dict = field(default_factory=dict)  # full raw task dictionary (labels, root_causes, etc.)

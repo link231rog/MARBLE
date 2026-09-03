@@ -109,9 +109,19 @@ def model_prompting(
         api_key = os.environ.get("ZAI_API_KEY") or api_key
     if api_key:
         completion_kwargs["api_key"] = api_key
+    input_messages = _normalize_zai_messages(messages) if is_zai else messages
+    safe_messages = []
+    for msg in input_messages:
+        if isinstance(msg, dict) and "content" in msg and isinstance(msg["content"], str):
+            c = msg["content"]
+            if len(c) > 60000:
+                msg = dict(msg)
+                msg["content"] = c[:20000] + "\n\n... [TRUNCATED DUE TO CONTEXT LIMIT] ...\n\n" + c[-40000:]
+        safe_messages.append(msg)
+
     completion = litellm.completion(
         model=llm_model,
-        messages=_normalize_zai_messages(messages) if is_zai else messages,
+        messages=safe_messages,
         max_tokens=max_token_num,
         n=return_num,
         top_p=top_p,

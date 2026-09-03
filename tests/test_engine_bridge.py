@@ -70,9 +70,9 @@ def test_before_act_counts_key_cards_and_notes_separately(tmp_path):
     context = step._context_by_agent["coder"]
     key_text = (
         "Shared memory keys:\n"
-        f"- {item.memory_id} | {item.title} | {item.visibility} | owner={item.owner_id}"
+        f"- [M1] {item.title} ({item.visibility})"
     )
-    notes_text = f"- [{item.memory_id}] read this note"
+    notes_text = f"- [{item.title}] read this note"
     assert context["memory_card_tokens"] == token_count(key_text)
     assert context["injected_memory_tokens"] == token_count(notes_text)
 
@@ -90,7 +90,9 @@ def test_selector_cap_and_unknown_ids_skipped(tmp_path):
     )
     step.task_id = "t"
     out = step.before_act("coder", "q")
-    assert out.count("- [") == 2
+    assert "Read notes:" in out
+    read_section = out.split("Read notes:\n")[1]
+    assert read_section.count("- [") == 2
     assert step.reads_this_episode == 2
 
 

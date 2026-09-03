@@ -28,10 +28,17 @@ def api_generate_fn(
     api_key: str,
     model: str,
     max_tokens: int = 256,
+    timeout: Optional[float] = None,
 ) -> Callable[[str], str]:
+    import os
     from openai import OpenAI
 
-    client = OpenAI(base_url=api_base, api_key=api_key)
+    eff_timeout = (
+        timeout
+        if timeout is not None
+        else float(os.environ.get("MARBLE_CONTROLLER_TIMEOUT", "60.0"))
+    )
+    client = OpenAI(base_url=api_base, api_key=api_key, timeout=eff_timeout)
 
     def gen(prompt: str) -> str:
         resp = client.chat.completions.create(

@@ -60,6 +60,27 @@ def test_api_generate_fn_records_completion_usage(monkeypatch):
     }
 
 
+def test_api_generate_fn_passes_timeout(monkeypatch):
+    from marble.controllers.qwen_lora import api_generate_fn
+
+    received = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            received.update(kwargs)
+            self.chat = SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=lambda **kw: SimpleNamespace(
+                        choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+                    )
+                )
+            )
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    api_generate_fn("https://example.test/v1", "key", "qwen", timeout=45.0)
+    assert received.get("timeout") == 45.0
+
+
 def test_factory_applies_schema_drop_kwargs_to_runtime_prompt():
     prompts = []
     ctrl = make_qwen_lora_controller(

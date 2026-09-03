@@ -12,11 +12,23 @@ import os
 import random
 import re
 import secrets
+import signal
 import socket
 import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
+class TaskTimeoutError(TimeoutError):
+    """Raised when an episode execution exceeds the allowed task timeout."""
+    pass
 
 from marble.benchmarks import BENCHMARKS, BenchmarkTask, load_tasks
 from marble.controllers import (
@@ -77,12 +89,17 @@ _PROVIDER_DEFAULTS = {
         "key_vars": ("EMPERO_API_KEY",),
         "default_key": "free",
     },
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "worker_model": "openai/nvidia/nemotron-3-super-120b-a12b",
+        "key_vars": ("NVIDIA_API_KEY", "NVAPI_KEY", "OPENAI_API_KEY", "MARBLE_API_KEY"),
+    },
 }
 
 
 def provider_config(provider: str) -> Dict[str, Any]:
     if provider not in _PROVIDER_DEFAULTS:
-        raise ValueError(f"unknown provider {provider!r}; choose sensenova|zai|empero")
+        raise ValueError(f"unknown provider {provider!r}; choose sensenova|zai|empero|nvidia")
     defaults = _PROVIDER_DEFAULTS[provider]
     prefix = provider.upper()
     return {
@@ -336,9 +353,12 @@ def task_config(
         if provider_defaults
         else os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm
     ) or DEFAULT_WORKER_MODEL
+    task_payload = dict(getattr(task, "task_data", None) or {})
+    if "content" not in task_payload:
+        task_payload["content"] = task.task
     cfg: Dict[str, Any] = {
         "provider": provider,
-        "task": {"content": task.task},
+        "task": task_payload,
         "agents": [dict(a) for a in task.agents],
         "relationships": [list(r) for r in task.relationships],
         "environment": dict(task.environment),
@@ -486,6 +506,7 @@ def run_task(
     beta: float = 0.25,
     manifest: Optional[str] = None,
     provider: Optional[str] = None,
+    task_timeout: Optional[float] = 900.0,
 ) -> Dict[str, Any]:
     if lambda_ < 0:
         raise ValueError("lambda must be non-negative")
@@ -496,8 +517,21 @@ def run_task(
         _configure_provider(provider)
     if seed is not None:
         random.seed(seed)
+
+    # Ensure invalid IPv6 NO_PROXY like :1 doesn't crash httpx
+    for var in ("NO_PROXY", "no_proxy"):
+        val = os.environ.get(var, "")
+        if ":1" in val or "::1" in val:
+            os.environ.pop(var, None)
+
     tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
     tdir.mkdir(parents=True, exist_ok=True)
+
+    # Isolate database fixture writes into task output dir
+    if task.benchmark == "database":
+        os.environ["MARBLE_DATASET_LOG"] = str((tdir / "dataset.txt").resolve())
+        os.environ["MARBLE_BADSQL_LOG"] = str((tdir / "badsql.txt").resolve())
+
     _append_run_event(out_root, "task_start", task, baseline=baseline)
 
     completed = tdir / "summary.json"
@@ -600,6 +634,18 @@ def run_task(
         )
         return summary
 
+    old_handler = None
+    if task_timeout and task_timeout > 0 and hasattr(signal, "SIGALRM"):
+        def _alarm_handler(signum, frame):
+            raise TaskTimeoutError(
+                f"Task execution exceeded timeout limit of {task_timeout}s"
+            )
+        try:
+            old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+            signal.alarm(int(task_timeout))
+        except (ValueError, AttributeError):
+            old_handler = None
+
     try:
         metrics = _run_real_episode(
             task, effective_baseline, tdir, cfg,
@@ -621,6 +667,18 @@ def run_task(
         summary.update(metrics)
         if metrics.get("score_status") != "available":
             summary["status"] = "score_unavailable"
+    except TaskTimeoutError as exc:
+        summary["status"] = "timeout"
+        errors.append(f"TaskTimeoutError: {exc}")
+        errors.append(traceback.format_exc())
+        _append_run_event(
+            out_root,
+            "task_timeout",
+            task,
+            baseline=baseline,
+            timeout=task_timeout,
+            error=str(exc),
+        )
     except Exception as exc:  # noqa: BLE001 — one bad task must not kill the sweep
         summary["status"] = "error"
         errors.append(f"{type(exc).__name__}: {exc}")
@@ -633,6 +691,10 @@ def run_task(
             error_type=type(exc).__name__,
             error=str(exc),
         )
+    finally:
+        if old_handler is not None and hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
     if errors:
         (tdir / "errors.log").write_text("\n".join(errors) + "\n", encoding="utf-8")
@@ -699,7 +761,7 @@ def _run_real_episode(
     )
     # ponytail: selector "top" makes agents read the top-ranked cards without an
     # extra API call, so memory actually influences the task
-    if retriever not in ("key_first", "none"):
+    if retriever not in ("key_first", "visible_k", "none"):
         print(f"[warn] retrieval {retriever!r} not implemented; using key_first")
     eff_max_cards = 0 if retriever == "none" else max_cards
     agent_role_map = {
@@ -714,6 +776,7 @@ def _run_real_episode(
     harness = MemoryStep(
         mem, max_cards=eff_max_cards, max_reads_per_step=max_reads_per_step,
         selector="top", task_goal=task.task, agent_role_map=agent_role_map,
+        baseline=baseline,
     )
     harness.task_id = str(task.task_id)
 
@@ -811,7 +874,7 @@ def _run_real_episode(
     effective_reward_kw = {"beta": beta, "lambda_": lambda_}
     effective_reward_kw.update(reward_kw)
     credits = proposal_rewards(
-        events, task_score=float(metrics.get("task_score", 0.0)),
+        events, task_score=float(metrics.get("task_score") or 0.0),
         same_task_baseline=0.0,
         **effective_reward_kw,
     )
@@ -850,21 +913,23 @@ def _score_result(
 ) -> Dict[str, Any]:
     """Return only benchmark-specific, normalized and inspectable task scores."""
     metrics = getattr(evaluator, "metrics", {}) or {}
-    if not result_text and benchmark != "bargaining":
-        return {"score_status": "unavailable", "task_score": None, "task_success": None}
     try:
         if benchmark == "research":
-            evaluator.evaluate_task_research(task_content, result_text)
             values = _valid_ratings((metrics.get("task_evaluation") or {}).values())
+            if not values and result_text and evaluator is not None and hasattr(evaluator, "evaluate_task_research"):
+                evaluator.evaluate_task_research(task_content, result_text)
+                values = _valid_ratings((metrics.get("task_evaluation") or {}).values())
             return _rating_result(values)
         if benchmark == "coding":
-            evaluator.evaluate_code_quality(task_content, result_text)
             values = _valid_ratings((metrics.get("code_quality") or {}).values())
+            if not values and result_text and evaluator is not None and hasattr(evaluator, "evaluate_code_quality"):
+                evaluator.evaluate_code_quality(task_content, result_text)
+                values = _valid_ratings((metrics.get("code_quality") or {}).values())
             result = _rating_result(values)
             if values:
                 result["task_success"] = (
-                    (metrics["code_quality"].get("executability", 0) >= 4)
-                    and (metrics["code_quality"].get("instruction_following", 0) >= 4)
+                    (metrics.get("code_quality", {}).get("executability", 0) >= 4)
+                    and (metrics.get("code_quality", {}).get("instruction_following", 0) >= 4)
                 )
             return result
         if benchmark == "database":
@@ -964,7 +1029,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--retrieval", default="key_first")
     ap.add_argument("--max-cards", type=int, default=6)
     ap.add_argument("--max-reads-per-step", type=int, default=2)
-    ap.add_argument("--lambda", dest="lambda_", type=float, default=0.05)
+    ap.add_argument("--lambda", dest="lambda_", type=float, default=0.15)
     ap.add_argument("--beta", type=float, default=0.25)
     ap.add_argument("--controller-checkpoint", default=None)
     ap.add_argument(
@@ -992,6 +1057,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--worker-model", default=None, help="litellm model string for workers")
     ap.add_argument("--provider", choices=tuple(_PROVIDER_DEFAULTS), default=None)
     ap.add_argument("--ablation", default=None, help="factor:option, e.g. retrieval:none")
+    ap.add_argument(
+        "--task-timeout",
+        type=float,
+        default=float(os.environ.get("MARBLE_TASK_TIMEOUT", "900.0")),
+        help="max execution time in seconds per task before raising timeout (default: 900.0)",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--out",
@@ -1072,6 +1143,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             beta=args.beta,
             manifest=args.manifest,
             provider=args.provider,
+            task_timeout=args.task_timeout,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 

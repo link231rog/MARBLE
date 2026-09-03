@@ -607,3 +607,70 @@ def test_rating_score_rejects_invalid_ratings_and_tracks_agreement():
     assert _score_result(
         "research", InvalidEvaluator(), "task", "idea", None
     )["score_status"] == "unavailable"
+
+
+def test_task_timeout_records_timeout_status_and_allows_rerun(tmp_path, monkeypatch):
+    from marble.experiments.run_benchmark import TaskTimeoutError
+
+    t = _task()
+
+    def timeout_episode(*args, **kwargs):
+        raise TaskTimeoutError("Task exceeded timeout limit of 5.0s")
+
+    monkeypatch.setattr(
+        "marble.experiments.run_benchmark._run_real_episode",
+        timeout_episode,
+    )
+    summary = run_task(t, "heuristic", tmp_path, task_timeout=5.0)
+    assert summary["status"] == "timeout"
+    tdir = tmp_path / "heuristic" / "coding" / str(t.task_id)
+    assert (tdir / "errors.log").exists()
+    assert "TaskTimeoutError" in (tdir / "errors.log").read_text()
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "run_events.jsonl").read_text().splitlines()
+    ]
+    event_names = [e["event"] for e in events]
+    assert "task_timeout" in event_names
+    assert events[-1]["status"] == "timeout"
+
+    # Verify resume does not skip timed-out tasks
+    called = []
+    def record_call(*args, **kwargs):
+        called.append(True)
+        return {"score_status": "available", "task_score": 1.0}
+
+    monkeypatch.setattr(
+        "marble.experiments.run_benchmark._run_real_episode",
+        record_call,
+    )
+    summary2 = run_task(t, "heuristic", tmp_path, task_timeout=5.0)
+    assert len(called) == 1
+    assert summary2["status"] == "ok"
+
+
+def test_no_proxy_with_ipv6_port_is_cleared(tmp_path, monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,:1")
+    monkeypatch.setenv("no_proxy", "::1,localhost")
+    t = _task()
+    run_task(t, "heuristic", tmp_path, dry_run=True)
+    assert "NO_PROXY" not in os.environ
+    assert "no_proxy" not in os.environ
+
+
+def test_database_fixture_paths_isolated(tmp_path, monkeypatch):
+    t = replace(_task(), benchmark="database")
+    run_task(t, "heuristic", tmp_path, dry_run=True)
+    tdir = tmp_path / "heuristic" / "database" / str(t.task_id)
+    assert os.environ.get("MARBLE_DATASET_LOG") == str((tdir / "dataset.txt").resolve())
+    assert os.environ.get("MARBLE_BADSQL_LOG") == str((tdir / "badsql.txt").resolve())
+
+
+def test_visible_k_retriever_accepted_without_warning(capsys, tmp_path, monkeypatch):
+    t = _task()
+    summary = run_task(t, "heuristic", tmp_path, retriever="visible_k", dry_run=True)
+    captured = capsys.readouterr()
+    assert "[warn] retrieval 'visible_k' not implemented" not in captured.out
+    assert summary["retrieval"]["name"] == "visible_k"
+
