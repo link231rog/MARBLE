@@ -71,12 +71,18 @@ _PROVIDER_DEFAULTS = {
         "worker_model": "openai/glm-4.7-flash",
         "key_vars": ("ZAI_API_KEY", "OPENAI_API_KEY", "MARBLE_API_KEY"),
     },
+    "empero": {
+        "base_url": "https://free.empero.org/v1",
+        "worker_model": "openai/glm-5.3-flash",
+        "key_vars": ("EMPERO_API_KEY",),
+        "default_key": "free",
+    },
 }
 
 
 def provider_config(provider: str) -> Dict[str, Any]:
     if provider not in _PROVIDER_DEFAULTS:
-        raise ValueError(f"unknown provider {provider!r}; choose sensenova|zai")
+        raise ValueError(f"unknown provider {provider!r}; choose sensenova|zai|empero")
     defaults = _PROVIDER_DEFAULTS[provider]
     prefix = provider.upper()
     return {
@@ -92,12 +98,12 @@ def provider_config(provider: str) -> Dict[str, Any]:
             f"MARBLE_{prefix}_EVAL_MODEL",
             os.environ.get(
                 f"{prefix}_EVAL_MODEL",
-                os.environ.get("MARBLE_EVAL_MODEL", defaults["worker_model"]),
+                defaults["worker_model"],
             ),
         ),
         "key": next(
             (os.environ[name] for name in defaults["key_vars"] if os.environ.get(name)),
-            "",
+            defaults.get("default_key", ""),
         ),
     }
 
@@ -315,23 +321,21 @@ def task_config(
     retriever: str = "key_first",
     llm: str = "",
     ablation: Optional[str] = None,
-    provider: str = "sensenova",
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Original record + governed memory block injected (source untouched)."""
     if max_cards < 0 or max_reads_per_step < 0:
         raise ValueError("max_cards and max_reads_per_step must be non-negative")
     baseline = canonical_baseline(baseline)
     spec = baseline_spec(baseline)
-    provider_defaults = provider_config(provider)
-    # ponytail: deployment pins worker via MARBLE_WORKER_MODEL env; that MUST
-    # override per-dataset llm (e.g. minecraft ships "gpt-4o-mini").
-    worker = (
-        llm
-        or os.environ.get("MARBLE_WORKER_MODEL", "")
-        or task.llm
-        or provider_defaults["worker_model"]
-        or DEFAULT_WORKER_MODEL
-    )
+    provider_defaults = provider_config(provider) if provider else None
+    # A selected provider owns its model choice; the legacy global path applies
+    # only when --provider is omitted.
+    worker = llm or (
+        provider_defaults["worker_model"]
+        if provider_defaults
+        else os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm
+    ) or DEFAULT_WORKER_MODEL
     cfg: Dict[str, Any] = {
         "provider": provider,
         "task": {"content": task.task},
@@ -350,9 +354,10 @@ def task_config(
         "metrics": {
             **dict(task.metrics),
             "evaluate_llm": (
-                os.environ.get("MARBLE_EVAL_MODEL")
+                provider_defaults["eval_model"]
+                if provider_defaults
+                else os.environ.get("MARBLE_EVAL_MODEL")
                 or task.metrics.get("evaluate_llm")
-                or provider_defaults["eval_model"]
                 or worker
             ),
         },
@@ -480,14 +485,15 @@ def run_task(
     lambda_: float = 0.05,
     beta: float = 0.25,
     manifest: Optional[str] = None,
-    provider: str = "sensenova",
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     if lambda_ < 0:
         raise ValueError("lambda must be non-negative")
     if beta < 0:
         raise ValueError("beta must be non-negative")
     baseline = canonical_baseline(baseline)
-    _configure_provider(provider)
+    if provider:
+        _configure_provider(provider)
     if seed is not None:
         random.seed(seed)
     tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
@@ -984,7 +990,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="controller sampling temperature; use >0 for RL rollout collection",
     )
     ap.add_argument("--worker-model", default=None, help="litellm model string for workers")
-    ap.add_argument("--provider", choices=tuple(_PROVIDER_DEFAULTS), default="sensenova")
+    ap.add_argument("--provider", choices=tuple(_PROVIDER_DEFAULTS), default=None)
     ap.add_argument("--ablation", default=None, help="factor:option, e.g. retrieval:none")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
@@ -993,7 +999,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="explicit run root; omit to create a timestamped run under runs/",
     )
     args = ap.parse_args(argv)
-    _configure_provider(args.provider)
+    if args.provider:
+        _configure_provider(args.provider)
 
     # ponytail: global floor so any untimeouted raw call (arxiv fetch, requests) can't hang forever
     socket.setdefaulttimeout(int(os.environ.get("MARBLE_SOCKET_TIMEOUT", "120")))

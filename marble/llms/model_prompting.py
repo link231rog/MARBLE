@@ -61,8 +61,9 @@ def _normalize_zai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 def _is_zai_request(llm_model: str, base_url: Optional[str]) -> bool:
-    target = f"{llm_model} {base_url or ''}".lower()
-    return "z.ai" in target or "glm-" in target
+    return "z.ai" in (base_url or "").lower() or (
+        base_url is None and "glm-" in llm_model.lower()
+    )
 
 
 @beartype
@@ -85,6 +86,8 @@ def model_prompting(
     Select model via router in LiteLLM with support for function calling.
     """
     # litellm.set_verbose=True
+    if base_url is None and llm_model.startswith("openai/"):
+        base_url = os.environ.get("OPENAI_API_BASE")
     if base_url is None and "together_ai/TA" in llm_model:
         base_url = "https://api.ohmygpt.com/v1"
     is_zai = _is_zai_request(llm_model, base_url)
@@ -101,10 +104,11 @@ def model_prompting(
         extra_body["reasoning_effort"] = effective_reasoning_effort
         extra_body["allowed_openai_params"] = ["reasoning_effort"]
     completion_kwargs: Dict[str, Any] = {}
+    api_key = os.environ.get("OPENAI_API_KEY")
     if is_zai:
-        api_key = os.environ.get("ZAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        if api_key:
-            completion_kwargs["api_key"] = api_key
+        api_key = os.environ.get("ZAI_API_KEY") or api_key
+    if api_key:
+        completion_kwargs["api_key"] = api_key
     completion = litellm.completion(
         model=llm_model,
         messages=_normalize_zai_messages(messages) if is_zai else messages,

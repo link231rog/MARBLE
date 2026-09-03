@@ -71,7 +71,9 @@ class TestModelPrompting(unittest.TestCase):
         with patch(
             "marble.llms.model_prompting.litellm.completion",
             return_value=completion,
-        ) as completion_mock:
+        ) as completion_mock, patch.dict(
+            "os.environ", {"OPENAI_API_BASE": ""}, clear=False
+        ):
             model_prompting(
                 llm_model="openai/deepseek-v4-flash",
                 messages=[{"role": "user", "content": "hello"}],
@@ -137,6 +139,30 @@ class TestModelPrompting(unittest.TestCase):
         )
         self.assertNotIn("reasoning_effort", kwargs)
         self.assertNotIn("allowed_openai_params", kwargs)
+
+    def test_empero_uses_openai_endpoint_without_zai_normalization(self) -> None:
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=Message(content="OK", role="assistant"))],
+            usage=None,
+        )
+        messages = [{"role": "assistant", "content": None, "extra": "preserve"}]
+        with patch(
+            "marble.llms.model_prompting.litellm.completion",
+            return_value=completion,
+        ) as completion_mock, patch.dict(
+            "os.environ",
+            {
+                "OPENAI_API_BASE": "https://free.empero.org/v1",
+                "OPENAI_API_KEY": "free",
+            },
+            clear=False,
+        ):
+            model_prompting(llm_model="openai/glm-5.3-flash", messages=messages)
+
+        kwargs = completion_mock.call_args.kwargs
+        self.assertEqual(kwargs["base_url"], "https://free.empero.org/v1")
+        self.assertEqual(kwargs["api_key"], "free")
+        self.assertEqual(kwargs["messages"], messages)
 
 
 if __name__ == "__main__":

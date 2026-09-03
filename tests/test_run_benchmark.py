@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from dataclasses import replace
 
 from marble.benchmarks import load_tasks
 from marble.controllers import LocalPolicyController
@@ -213,6 +214,44 @@ def test_provider_defaults_are_recorded_without_api_key(monkeypatch):
     assert "key" not in cfg
 
 
+def test_empero_provider_uses_its_own_models_and_default_key(monkeypatch):
+    for var in (
+        "MARBLE_WORKER_MODEL",
+        "MARBLE_EVAL_MODEL",
+        "MARBLE_EMPERO_MODEL",
+        "MARBLE_EMPERO_EVAL_MODEL",
+        "EMPERO_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    t = replace(_task(), llm="dataset-model")
+    monkeypatch.setenv("MARBLE_WORKER_MODEL", "legacy-worker")
+    monkeypatch.setenv("MARBLE_EVAL_MODEL", "legacy-evaluator")
+
+    cfg = task_config(t, "no_memory", provider="empero")
+
+    assert provider_config("empero") == {
+        "base_url": "https://free.empero.org/v1",
+        "worker_model": "openai/glm-5.3-flash",
+        "eval_model": "openai/glm-5.3-flash",
+        "key": "free",
+    }
+    assert cfg["llm"] == "openai/glm-5.3-flash"
+    assert cfg["metrics"]["evaluate_llm"] == "openai/glm-5.3-flash"
+
+
+def test_provider_specific_models_and_explicit_worker_take_precedence(monkeypatch):
+    t = _task()
+    monkeypatch.setenv("MARBLE_EMPERO_MODEL", "provider-worker")
+    monkeypatch.setenv("MARBLE_EMPERO_EVAL_MODEL", "provider-evaluator")
+
+    cfg = task_config(t, "no_memory", provider="empero")
+    explicit = task_config(t, "no_memory", llm="cli-worker", provider="empero")
+
+    assert cfg["llm"] == "provider-worker"
+    assert cfg["metrics"]["evaluate_llm"] == "provider-evaluator"
+    assert explicit["llm"] == "cli-worker"
+
+
 def test_cli_provider_and_explicit_worker_model_propagate(monkeypatch, tmp_path):
     from marble.experiments import run_benchmark
 
@@ -235,6 +274,30 @@ def test_cli_provider_and_explicit_worker_model_propagate(monkeypatch, tmp_path)
     assert captured[-1]["provider"] == "zai"
     assert captured[-1]["llm"] == "custom-worker"
     assert os.environ["OPENAI_API_BASE"] == "https://api.z.ai/api/paas/v4"
+
+
+def test_cli_accepts_empero_provider(monkeypatch, tmp_path):
+    from marble.experiments import run_benchmark
+
+    monkeypatch.setattr(run_benchmark, "load_tasks", lambda *args, **kwargs: [_task()])
+    captured = []
+    monkeypatch.setattr(
+        run_benchmark,
+        "run_task",
+        lambda task, baseline, out_root, **kwargs: captured.append(kwargs)
+        or {"status": "dry_run", "task_id": task.task_id},
+    )
+    run_benchmark.main([
+        "--benchmark", "coding",
+        "--baseline", "no_memory",
+        "--provider", "empero",
+        "--dry-run",
+        "--out", str(tmp_path),
+    ])
+
+    assert captured[-1]["provider"] == "empero"
+    assert os.environ["OPENAI_API_BASE"] == "https://free.empero.org/v1"
+    assert os.environ["OPENAI_API_KEY"] == "free"
 
 
 def test_single_agent_task_config_keeps_only_one_agent():
