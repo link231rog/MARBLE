@@ -12,7 +12,7 @@ if [ -f ".env" ]; then
 fi
 
 UV="/Users/huangzixuan/.local/bin/uv"
-OUT_DIR="runs/nvidia-gpt-oss-main-20260903"
+OUT_DIR="runs/nvidia-gpt-oss-stratified-20260904"
 mkdir -p "$OUT_DIR"
 MANIFEST="configs/experiments/multiagentbench_stratified_frozen.json"
 
@@ -49,6 +49,8 @@ run_research_slice() {
         --max-iterations 5 \
         --retrieval visible_k \
         --max-cards 5 \
+        --lambda 0.15 \
+        --beta 0.25 \
         --task-timeout 900 \
         --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_${split}_${baseline}_w${worker_id}.log"
 }

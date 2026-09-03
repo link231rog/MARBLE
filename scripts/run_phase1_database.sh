@@ -12,12 +12,14 @@ if [ -f ".env" ]; then
 fi
 
 UV="/Users/huangzixuan/.local/bin/uv"
-OUT_DIR="runs/nvidia-gpt-oss-main-20260903"
+OUT_DIR="runs/nvidia-gpt-oss-stratified-20260904"
 mkdir -p "$OUT_DIR"
+MANIFEST="configs/experiments/multiagentbench_stratified_frozen.json"
 
 echo "========================================================"
-echo "[Stream 1 - Database] Starting Database Benchmark Stream"
+echo "[Stream 1 - Database] Starting Stratified Database Benchmark Stream"
 echo "Target Dir: $OUT_DIR"
+echo "Manifest: $MANIFEST"
 echo "Worker Model: $MARBLE_WORKER_MODEL"
 echo "========================================================"
 
@@ -29,46 +31,50 @@ BASELINES=(
     "memory_r1_style"
 )
 
-# Step 1: Run Train Split (Tasks 1, 2, 3)
-echo ">>> [Stream 1.1] Database Train Split (Tasks 1, 2, 3)..."
+# Step 1: Run Train Split (Standard: 1, 2, 3 | Hard: 51, 52, 53)
+echo ">>> [Stream 1.1] Database Train Split (6 Tasks)..."
 for baseline in "${BASELINES[@]}"; do
     echo "--------------------------------------------------------"
     echo ">>> [Database] Train Split: Baseline = $baseline"
     echo "--------------------------------------------------------"
     $UV run python -u -m marble.experiments.run_benchmark \
         --benchmark database \
-        --manifest configs/experiments/multiagentbench_frozen.json \
+        --manifest "$MANIFEST" \
         --split train \
         --baseline "$baseline" \
         --seed 42 \
         --max-iterations 5 \
         --retrieval visible_k \
         --max-cards 5 \
+        --lambda 0.15 \
+        --beta 0.25 \
         --task-timeout 900 \
         --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_train_${baseline}.log"
 done
 
 echo ">>> [Stream 1.1] Database Train Split Completed!"
 
-# Step 2: Run Test Split (Tasks 4..12)
-echo ">>> [Stream 1.2] Database Test Split (Tasks 4..12)..."
+# Step 2: Run Test Split (Standard: 4, 5, 6, 7 | Hard: 54, 55, 56, 57)
+echo ">>> [Stream 1.2] Database Test Split (8 Tasks)..."
 for baseline in "${BASELINES[@]}"; do
     echo "--------------------------------------------------------"
     echo ">>> [Database] Test Split: Baseline = $baseline"
     echo "--------------------------------------------------------"
     $UV run python -u -m marble.experiments.run_benchmark \
         --benchmark database \
-        --manifest configs/experiments/multiagentbench_frozen.json \
+        --manifest "$MANIFEST" \
         --split test \
         --baseline "$baseline" \
         --seed 42 \
         --max-iterations 5 \
         --retrieval visible_k \
         --max-cards 5 \
+        --lambda 0.15 \
+        --beta 0.25 \
         --task-timeout 900 \
         --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_test_${baseline}.log"
 done
 
 echo "========================================================"
-echo "[Stream 1 - Database] All Database Tasks Completed!"
+echo "[Stream 1 - Database] All Stratified Database Tasks Completed!"
 echo "========================================================"
