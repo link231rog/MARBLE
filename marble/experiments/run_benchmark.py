@@ -60,6 +60,54 @@ BASELINES = MAIN_BASELINES
 DEFAULT_WORKER_MODEL = "gpt-3.5-turbo"
 
 _WORKER_KEY_VARS = ("OPENAI_API_KEY", "NVAPI_KEY", "MARBLE_API_KEY")
+_PROVIDER_DEFAULTS = {
+    "sensenova": {
+        "base_url": "https://api.sensenova.cn/compatible-mode/v1",
+        "worker_model": "openai/deepseek-v4-flash",
+        "key_vars": ("SENSENOVA_API_KEY", "OPENAI_API_KEY", "MARBLE_API_KEY"),
+    },
+    "zai": {
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "worker_model": "openai/glm-4.7-flash",
+        "key_vars": ("ZAI_API_KEY", "OPENAI_API_KEY", "MARBLE_API_KEY"),
+    },
+}
+
+
+def provider_config(provider: str) -> Dict[str, Any]:
+    if provider not in _PROVIDER_DEFAULTS:
+        raise ValueError(f"unknown provider {provider!r}; choose sensenova|zai")
+    defaults = _PROVIDER_DEFAULTS[provider]
+    prefix = provider.upper()
+    return {
+        "base_url": os.environ.get(
+            f"MARBLE_{prefix}_API_BASE",
+            os.environ.get(f"{prefix}_API_BASE", defaults["base_url"]),
+        ),
+        "worker_model": os.environ.get(
+            f"MARBLE_{prefix}_MODEL",
+            os.environ.get(f"{prefix}_MODEL", defaults["worker_model"]),
+        ),
+        "eval_model": os.environ.get(
+            f"MARBLE_{prefix}_EVAL_MODEL",
+            os.environ.get(
+                f"{prefix}_EVAL_MODEL",
+                os.environ.get("MARBLE_EVAL_MODEL", defaults["worker_model"]),
+            ),
+        ),
+        "key": next(
+            (os.environ[name] for name in defaults["key_vars"] if os.environ.get(name)),
+            "",
+        ),
+    }
+
+
+def _configure_provider(provider: str) -> Dict[str, Any]:
+    config = provider_config(provider)
+    os.environ["OPENAI_API_BASE"] = config["base_url"]
+    if config["key"]:
+        os.environ["OPENAI_API_KEY"] = config["key"]
+    return config
 
 
 # ----------------------------------------------------------------- controllers
@@ -267,16 +315,25 @@ def task_config(
     retriever: str = "key_first",
     llm: str = "",
     ablation: Optional[str] = None,
+    provider: str = "sensenova",
 ) -> Dict[str, Any]:
     """Original record + governed memory block injected (source untouched)."""
     if max_cards < 0 or max_reads_per_step < 0:
         raise ValueError("max_cards and max_reads_per_step must be non-negative")
     baseline = canonical_baseline(baseline)
     spec = baseline_spec(baseline)
+    provider_defaults = provider_config(provider)
     # ponytail: deployment pins worker via MARBLE_WORKER_MODEL env; that MUST
     # override per-dataset llm (e.g. minecraft ships "gpt-4o-mini").
-    worker = llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL
+    worker = (
+        llm
+        or os.environ.get("MARBLE_WORKER_MODEL", "")
+        or task.llm
+        or provider_defaults["worker_model"]
+        or DEFAULT_WORKER_MODEL
+    )
     cfg: Dict[str, Any] = {
+        "provider": provider,
         "task": {"content": task.task},
         "agents": [dict(a) for a in task.agents],
         "relationships": [list(r) for r in task.relationships],
@@ -295,6 +352,7 @@ def task_config(
             "evaluate_llm": (
                 os.environ.get("MARBLE_EVAL_MODEL")
                 or task.metrics.get("evaluate_llm")
+                or provider_defaults["eval_model"]
                 or worker
             ),
         },
@@ -422,12 +480,14 @@ def run_task(
     lambda_: float = 0.05,
     beta: float = 0.25,
     manifest: Optional[str] = None,
+    provider: str = "sensenova",
 ) -> Dict[str, Any]:
     if lambda_ < 0:
         raise ValueError("lambda must be non-negative")
     if beta < 0:
         raise ValueError("beta must be non-negative")
     baseline = canonical_baseline(baseline)
+    _configure_provider(provider)
     if seed is not None:
         random.seed(seed)
     tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
@@ -453,7 +513,14 @@ def run_task(
     errors: List[str] = []
 
     cfg = task_config(
-        task, baseline, max_cards, max_reads_per_step, retriever, llm, ablation
+        task,
+        baseline,
+        max_cards,
+        max_reads_per_step,
+        retriever,
+        llm,
+        ablation,
+        provider,
     )
     # ponytail: ablations mutate the config memory block (policy->controller name,
     # retrieval:none->max_cards=0). make_controller is keyed by baseline, so the
@@ -481,9 +548,10 @@ def run_task(
         "seed": seed,
         "ablation": ablation,
         "manifest": manifest,
+        "provider": provider,
         "status": "ok",
         # spec §11.2/§11.3: record the exact models used, all non-empty
-        "worker_model": llm or os.environ.get("MARBLE_WORKER_MODEL", "") or task.llm or DEFAULT_WORKER_MODEL,
+        "worker_model": cfg["llm"],
         "controller_model": (
             "learned_controller(local_policy)"
             if baseline == "learned_controller"
@@ -498,7 +566,7 @@ def run_task(
                 else baseline
             )
         ),
-        "evaluator_model": os.environ.get("MARBLE_EVAL_MODEL", "") or cfg["metrics"].get("evaluate_llm", ""),
+        "evaluator_model": cfg["metrics"].get("evaluate_llm", ""),
         "retrieval": {
             "name": retriever,
             "max_cards": effective_max_cards,
@@ -542,6 +610,7 @@ def run_task(
             qwen_temperature=qwen_temperature,
             lambda_=lambda_,
             beta=beta,
+            provider=provider,
         )
         summary.update(metrics)
         if metrics.get("score_status") != "available":
@@ -568,13 +637,14 @@ def run_task(
     return summary
 
 
-def _require_worker_key() -> None:
+def _require_worker_key(provider: str = "sensenova") -> None:
     import os
 
-    if not any(os.environ.get(k) for k in _WORKER_KEY_VARS):
+    key_vars = _PROVIDER_DEFAULTS.get(provider, {}).get("key_vars", _WORKER_KEY_VARS)
+    if not any(os.environ.get(k) for k in key_vars):
         raise RuntimeError(
             "real rollout needs a worker API key: set one of "
-            f"{', '.join(_WORKER_KEY_VARS)} (or use --dry-run)"
+            f"{', '.join(key_vars)} (or use --dry-run)"
         )
 
 
@@ -597,8 +667,9 @@ def _run_real_episode(
     qwen_temperature: float = 0.0,
     lambda_: float = 0.05,
     beta: float = 0.25,
+    provider: str = "sensenova",
 ) -> Dict[str, Any]:
-    _require_worker_key()
+    _require_worker_key(provider)
     import os
 
     from marble.configs.config import Config
@@ -913,6 +984,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="controller sampling temperature; use >0 for RL rollout collection",
     )
     ap.add_argument("--worker-model", default=None, help="litellm model string for workers")
+    ap.add_argument("--provider", choices=tuple(_PROVIDER_DEFAULTS), default="sensenova")
     ap.add_argument("--ablation", default=None, help="factor:option, e.g. retrieval:none")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
@@ -921,6 +993,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="explicit run root; omit to create a timestamped run under runs/",
     )
     args = ap.parse_args(argv)
+    _configure_provider(args.provider)
 
     # ponytail: global floor so any untimeouted raw call (arxiv fetch, requests) can't hang forever
     socket.setdefaulttimeout(int(os.environ.get("MARBLE_SOCKET_TIMEOUT", "120")))
@@ -954,9 +1027,6 @@ def main(argv: Optional[List[str]] = None) -> None:
         tasks = _apply_split(tasks, args.split)
     if args.limit:
         tasks = tasks[: args.limit]
-    if args.worker_model:
-        os.environ.setdefault("MARBLE_WORKER_MODEL", args.worker_model)
-
     # --baseline multi expands to the frozen main-method matrix.
     baselines = ["multi"] if args.baseline == "multi" else [args.baseline]
     runs = plan_runs(baselines, tasks)
@@ -994,6 +1064,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             lambda_=args.lambda_,
             beta=args.beta,
             manifest=args.manifest,
+            provider=args.provider,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 

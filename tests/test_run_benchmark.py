@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 from marble.benchmarks import load_tasks
@@ -9,6 +10,7 @@ from marble.experiments.run_benchmark import (
     make_controller,
     make_governed,
     plan_runs,
+    provider_config,
     run_task,
     task_config,
 )
@@ -47,6 +49,7 @@ def test_learned_controller_unified_local_policy_without_key(monkeypatch):
 
 def test_qwen_local_mode_loads_adapter_without_overloading_learned_controller(monkeypatch):
     seen = {}
+    monkeypatch.delenv("MARBLE_QWEN_API_BASE", raising=False)
 
     def fake_local(base_model, lora_dir, temperature=0.0):
         seen["base_model"] = base_model
@@ -187,6 +190,51 @@ def test_task_config_injects_governed_block_only_when_needed():
     for orig, injected in zip(t.agents, gov["agents"]):
         assert {k: v for k, v in injected.items() if k != "llm"} == dict(orig)
         assert injected["llm"]
+
+
+def test_provider_defaults_are_recorded_without_api_key(monkeypatch):
+    for var in (
+        "MARBLE_WORKER_MODEL",
+        "MARBLE_EVAL_MODEL",
+        "MARBLE_ZAI_MODEL",
+        "MARBLE_ZAI_EVAL_MODEL",
+        "ZAI_MODEL",
+        "ZAI_EVAL_MODEL",
+        "ZAI_API_KEY",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    t = _task()
+    cfg = task_config(t, "no_memory", provider="zai")
+    assert provider_config("zai")["base_url"] == "https://api.z.ai/api/paas/v4"
+    assert cfg["provider"] == "zai"
+    assert cfg["llm"] == "openai/glm-4.7-flash"
+    assert cfg["metrics"]["evaluate_llm"] == "openai/glm-4.7-flash"
+    assert "key" not in cfg
+
+
+def test_cli_provider_and_explicit_worker_model_propagate(monkeypatch, tmp_path):
+    from marble.experiments import run_benchmark
+
+    monkeypatch.setattr(run_benchmark, "load_tasks", lambda *args, **kwargs: [_task()])
+    captured = []
+    monkeypatch.setattr(
+        run_benchmark,
+        "run_task",
+        lambda task, baseline, out_root, **kwargs: captured.append(kwargs)
+        or {"status": "dry_run", "task_id": task.task_id},
+    )
+    run_benchmark.main([
+        "--benchmark", "coding",
+        "--baseline", "no_memory",
+        "--provider", "zai",
+        "--worker-model", "custom-worker",
+        "--dry-run",
+        "--out", str(tmp_path),
+    ])
+    assert captured[-1]["provider"] == "zai"
+    assert captured[-1]["llm"] == "custom-worker"
+    assert os.environ["OPENAI_API_BASE"] == "https://api.z.ai/api/paas/v4"
 
 
 def test_single_agent_task_config_keeps_only_one_agent():

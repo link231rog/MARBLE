@@ -84,6 +84,60 @@ class TestModelPrompting(unittest.TestCase):
             ["reasoning_effort"],
         )
 
+    def test_zai_normalizes_messages_without_dropping_tool_calls(self) -> None:
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=Message(content="OK", role="assistant"))],
+            usage=None,
+        )
+        assistant = SimpleNamespace(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    id="call-1",
+                    type="function",
+                    function=SimpleNamespace(name="lookup", arguments='{"q":"x"}'),
+                    extra="drop",
+                )
+            ],
+            extra="drop",
+        )
+        tool = SimpleNamespace(
+            role="tool",
+            content=None,
+            tool_call_id="call-1",
+            name="lookup",
+            extra="drop",
+        )
+        with patch(
+            "marble.llms.model_prompting.litellm.completion",
+            return_value=completion,
+        ) as completion_mock, patch.dict(
+            "os.environ", {"MARBLE_REASONING_EFFORT": "high"}, clear=False
+        ):
+            model_prompting(
+                llm_model="openai/glm-4.7-flash",
+                messages=[assistant, tool],
+            )
+
+        kwargs = completion_mock.call_args.kwargs
+        self.assertEqual(kwargs["base_url"], "https://api.z.ai/api/paas/v4")
+        self.assertEqual(
+            kwargs["messages"],
+            [
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"q":"x"}'},
+                    }
+                ]},
+                {"role": "tool", "content": "", "tool_call_id": "call-1"},
+            ],
+        )
+        self.assertNotIn("reasoning_effort", kwargs)
+        self.assertNotIn("allowed_openai_params", kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()
