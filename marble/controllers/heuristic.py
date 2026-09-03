@@ -7,7 +7,10 @@ from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
 
 
 _SHARED_SIGNALS = re.compile(
-    r"\b(share|shared|all|team|decision|result|consensus|plan|finding)\b",
+    r"\b(share|shared|all|team|decision|result|consensus|plan|finding|query_db|tool|"
+    r"observation|identified|bottleneck|workload|analysis|summary|literature|paper|"
+    r"detected|index|select|insert|vacuum|lock|stat|evidence|privacy|method|model|"
+    r"learning|gap|hypothesis|recommend|evaluation)\b",
     re.IGNORECASE,
 )
 
@@ -73,8 +76,8 @@ class PrivateOnlyController:
 class LTSStyleController:
     """Binary sharing baseline: reject local notes, publish shared findings.
 
-    This is an explicit ``absent/global`` policy and never emits private
-    memories.  It is kept separate from the proposed three-way controller.
+    This is an explicit ``absent/global`` policy following LTS (ICML 2026).
+    It never emits private memories.
     """
 
     def decide(
@@ -82,7 +85,12 @@ class LTSStyleController:
         proposal: MemoryProposal,
         current_state: Sequence[MemoryItem],
     ) -> MemoryTargetState:
-        if not proposal.raw_value.strip() or not _SHARED_SIGNALS.search(proposal.title):
+        title = proposal.title.strip().lower()
+        if not proposal.raw_value.strip() or not title:
+            return MemoryTargetState(False, "absent")
+        if title in {"empty observation", "none", "noop"} or "local" in title or "scratch" in title:
+            return MemoryTargetState(False, "absent")
+        if not _SHARED_SIGNALS.search(proposal.title):
             return MemoryTargetState(False, "absent")
         return MemoryTargetState(
             True,

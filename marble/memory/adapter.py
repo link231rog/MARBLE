@@ -6,92 +6,78 @@ from .governed_memory import GovernedMemory
 from .schema import MemoryCard, MemoryProposal, classify_topics
 
 
+import os
 import re
+from typing import Tuple
 
 
-def distill_proposal_output(output: str, max_title_words: int = 16) -> tuple[str, str]:
-    """Dual-Track Robust Memory Condenser.
+def distill_proposal_output(
+    output: str,
+    max_title_words: int = 24,
+    worker_model: Optional[str] = None,
+) -> tuple[str, str]:
+    """Pure LLM-driven Memory Condenser.
 
-    Track 1: Deterministic Tool-Event Extraction (Database SQL & Research tools).
-    Track 2: Stateless Semantic Distillation (Extracting core claims, stripping boilerplate).
+    Generates a high-quality, concise semantic summary key using the LLM,
+    with a graceful sentence-based fallback for offline/test environments.
     """
     output = output.strip()
     if not output:
         return "Empty observation", ""
 
-    # Track 1: Deterministic Tool-Event Extraction
-    if "Result from the function:" in output or "\"function_name\":" in output:
-        fn_match = re.search(r"\"function_name\":\s*\"([^\"]+)\"", output)
-        fn = fn_match.group(1) if fn_match else "tool"
-
-        # Database tool events
-        if "VACUUM" in output:
-            title = "query_db: VACUUM execution time bottleneck identified"
-            condensed = "Tool observation: VACUUM / VACUUM FULL shows dominant cumulative latency in pg_stat_statements."
-            return title, condensed
-        elif "INSERT" in output and ("total_exec_time" in output or "calls" in output):
-            title = "query_db: heavy INSERT workload identified"
-            condensed = "Tool observation: INSERT operations consume substantial execution time in pg_stat_statements."
-            return title, condensed
-        elif "pg_locks" in output:
-            title = "query_db: pg_locks checked, no blocking lock contention"
-            condensed = "Tool observation: pg_locks inspected; only shared locks present, exclusive lock contention ruled out."
-            return title, condensed
-        elif "pg_stat_user_indexes" in output or "REDUNDANT_INDEX" in output:
-            title = "query_db: user indexes analyzed for redundancy"
-            condensed = "Tool observation: User table index usage scanned for redundant or missing indexes."
-            return title, condensed
-        elif "pg_stat_activity" in output:
-            title = "query_db: pg_stat_activity background processes normal"
-            condensed = "Tool observation: pg_stat_activity inspected; active worker connections within expected bounds."
-            return title, condensed
-
-        # Research tool events
-        elif any(k in output for k in ["get_paper", "search_arxiv", "get_related_papers"]):
-            kw_match = re.search(r"['\"](?:query|keyword)['\"]:\s*['\"]([^'\"]+)['\"]", output)
-            kw = kw_match.group(1)[:30] if kw_match else "literature"
-            title = f"research: literature query on '{kw}'"
-            condensed = f"Tool observation: Retrieved academic papers and findings for topic '{kw}'."
-            return title, condensed
-        elif "communicate" in fn:
-            title = "communication: exchanged finding with collaborator"
-            condensed = "Communication session executed between collaborative agents."
-            return title, condensed
-        else:
-            title = f"[{fn}] execution completed"
-            condensed = f"Tool {fn} executed successfully."
-            return title, condensed
-
-    # Track 2: Stateless Semantic Distillation for Free-text / Reasoning
+    # Strip wrapper prefixes
     clean = re.sub(r"^Result from the model:\s*", "", output).strip()
+    clean = re.sub(r"^Result from the function:\s*", "", clean).strip()
     clean = re.sub(r"^As (?:an? )?[a-zA-Z0-9_]+,\s*", "", clean, flags=re.IGNORECASE)
 
-    # Check for explicit finding tags
-    finding_match = re.search(r"\[(?:Finding|Summary|Conclusion)\]:\s*([^\n]+)", clean, re.IGNORECASE)
+    # 1. Pure LLM Summary Key Generation
+    model = worker_model or os.environ.get("MARBLE_WORKER_MODEL")
+    if model:
+        try:
+            from marble.llms.model_prompting import model_prompting
+
+            prompt = (
+                "Summarize the core diagnostic or research finding below into a single, concise "
+                f"title key (maximum {max_title_words} words). "
+                'Return ONLY a JSON object: {"summary_key": "<concise summary key>"}.\n'
+                f"Finding:\n{clean[:1200]}"
+            )
+            resp = model_prompting(
+                llm_model=model,
+                messages=[{"role": "user", "content": prompt}],
+                return_num=1,
+                max_token_num=256,
+                temperature=0.0,
+            )[0]
+            raw_text = str(getattr(resp, "content", "") or "")
+            match = re.search(r'"summary_key"\s*:\s*"([^"]+)"', raw_text)
+            if match:
+                title = match.group(1).strip()
+                words = title.split()
+                if len(words) > max_title_words:
+                    title = " ".join(words[:max_title_words])
+                return title, clean[:800]
+        except Exception:
+            pass
+
+    # 2. Deterministic Fallback (Offline / unit tests)
+    finding_match = re.search(
+        r"\[(?:Finding|Summary|Conclusion)\]:\s*([^\n]+)", clean, re.IGNORECASE
+    )
     if finding_match:
-        claim = finding_match.group(1).strip()
-        words = claim.split()
+        words = finding_match.group(1).strip().split()
         return " ".join(words[:max_title_words]), clean[:800]
 
-    # Split into candidate sentences
     sentences = [s.strip() for s in re.split(r"[.\n]+", clean) if len(s.strip()) > 5]
     if sentences:
-        # Prioritize decisive diagnostic statements
-        decisive = [
-            s for s in sentences
-            if any(k in s.lower() for k in ["unlikely", "likely", "bottleneck", "conclude", "found", "root cause", "assign", "propose", "recommend"])
-        ]
-        chosen = decisive[0] if decisive else sentences[0]
-        words = chosen.split()
-        title = " ".join(words[:max_title_words])
-        condensed = "\n".join(sentences[:3])[:800]
-        return title, condensed
+        words = sentences[0].split()
+        return " ".join(words[:max_title_words]), clean[:800]
 
     words = clean.split()
     return " ".join(words[:max_title_words]), clean[:500]
 
 
-def make_title(output: str, max_words: int = 16) -> str:
+def make_title(output: str, max_words: int = 24) -> str:
     title, _ = distill_proposal_output(output, max_title_words=max_words)
     return title
 

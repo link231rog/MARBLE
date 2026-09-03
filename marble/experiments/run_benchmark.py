@@ -776,7 +776,7 @@ def _run_real_episode(
     harness = MemoryStep(
         mem, max_cards=eff_max_cards, max_reads_per_step=max_reads_per_step,
         selector="top", task_goal=task.task, agent_role_map=agent_role_map,
-        baseline=baseline,
+        baseline=baseline, worker_model=cfg["llm"],
     )
     harness.task_id = str(task.task_id)
 

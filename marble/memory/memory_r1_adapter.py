@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .memory_r1 import MemoryR1Item, MemoryR1Memory
@@ -144,20 +145,39 @@ def parse_crud_decision(
     raw: str,
     active: Sequence[MemoryR1Item],
 ) -> Dict[str, object]:
-    """Strictly validate an LLM CRUD decision; malformed output becomes NOOP."""
+    """Robustly validate an LLM CRUD decision; tolerant to markdown fences and extra fields."""
+    text = (raw or "").strip()
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        text = match.group(1)
+    else:
+        match_brace = re.search(r"\{[^{}]*\"operation\"[^{}]*\}", text, re.DOTALL)
+        if match_brace:
+            text = match_brace.group(0)
+
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(text)
     except (TypeError, json.JSONDecodeError):
         return {"operation": "NOOP", "memory_id": None}
-    if not isinstance(parsed, dict) or set(parsed) != {"operation", "memory_id"}:
+
+    if not isinstance(parsed, dict):
         return {"operation": "NOOP", "memory_id": None}
-    operation = parsed.get("operation")
-    memory_id = parsed.get("memory_id")
+
+    operation = str(parsed.get("operation", "NOOP")).strip().upper()
     if operation not in {"ADD", "UPDATE", "DELETE", "NOOP"}:
         return {"operation": "NOOP", "memory_id": None}
+
+    memory_id = parsed.get("memory_id")
+    if memory_id is not None:
+        memory_id = str(memory_id).strip()
+        if memory_id.lower() in {"null", "none", ""}:
+            memory_id = None
+
     active_ids = {item.memory_id for item in active}
-    if operation in {"UPDATE", "DELETE"} and memory_id not in active_ids:
-        return {"operation": "NOOP", "memory_id": None}
-    if operation in {"ADD", "NOOP"} and memory_id is not None:
-        return {"operation": "NOOP", "memory_id": None}
+    if operation in {"UPDATE", "DELETE"}:
+        if not memory_id or memory_id not in active_ids:
+            return {"operation": "NOOP", "memory_id": None}
+    elif operation in {"ADD", "NOOP"}:
+        memory_id = None
+
     return {"operation": operation, "memory_id": memory_id}

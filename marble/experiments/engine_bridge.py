@@ -27,6 +27,7 @@ class MemoryStep:
         task_goal: str = "",
         agent_role_map: Optional[Dict[str, str]] = None,
         baseline: str = "heuristic",
+        worker_model: Optional[str] = None,
     ):
         self.memory = memory
         # selector: "callable" (use selector_fn) or "top" (rank-order, no API)
@@ -41,6 +42,7 @@ class MemoryStep:
         self.task_goal = task_goal
         self.agent_role_map = dict(agent_role_map or {})
         self.baseline = baseline
+        self.worker_model = worker_model
         self._context_by_agent: Dict[str, Dict[str, int]] = {}
 
     # ------------------------------------------------------------------ before
@@ -130,7 +132,7 @@ class MemoryStep:
         controller = getattr(self.memory, "controller", None)
         if controller is not None and hasattr(controller, "set_context"):
             controller.set_context(self.task_goal, self.agent_role_map)
-        title, condensed_value = distill_proposal_output(output)
+        title, condensed_value = distill_proposal_output(output, worker_model=self.worker_model)
         proposal = MemoryProposal(
             proposal_id=f"{self.task_id}:{agent_id}:{self.steps.get(agent_id, 0)}",
             task_id=self.task_id,
@@ -233,6 +235,24 @@ def build_governed_engine_cls(engine_cls: Any = None, agent_cls: Any = None):
                         return False
                     return orig_decide(agents_results)
                 self.planner.decide_next_step = hooked_decide
+
+            if hasattr(self, "planner") and hasattr(self.planner, "summarize_output"):
+                orig_summarize = self.planner.summarize_output
+                def hooked_summarize(summary_text, task_text, output_format_text):
+                    env_name = getattr(self.environment, "name", "")
+                    if env_name == "DB Environment":
+                        output_format_text = (
+                            str(output_format_text or "")
+                            + "\nCRITICAL FINAL DECISION: You MUST conclude with the definitive root cause decision in JSON format: {\"root_causes\": [\"<CAUSE1>\", \"<CAUSE2>\"]}. Do NOT output next steps or process suggestions."
+                        )
+                    elif env_name == "Research Environment":
+                        output_format_text = (
+                            str(output_format_text or "")
+                            + "\nCRITICAL FINAL DECISION: Compile the definitive 5-Question (5q) research proposal addressing Question 1 through Question 5 in complete detail."
+                        )
+                    return orig_summarize(summary_text, task_text, output_format_text)
+                self.planner.summarize_output = hooked_summarize
+
             return super().start()
 
         def _initialize_agents(self, agent_configs):
