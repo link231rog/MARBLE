@@ -316,7 +316,7 @@ def _make_r1_distiller(worker_model: str):
 def task_config(
     task: BenchmarkTask,
     baseline: str,
-    max_cards: int = 6,
+    max_cards: int = 5,
     max_reads_per_step: int = 2,
     retriever: str = "key_first",
     llm: str = "",
@@ -471,7 +471,7 @@ def run_task(
     dry_run: bool = False,
     seed: Optional[int] = None,
     max_iterations: Optional[int] = None,
-    max_cards: int = 6,
+    max_cards: int = 5,
     max_reads_per_step: int = 2,
     retriever: str = "key_first",
     llm: str = "",

@@ -147,7 +147,7 @@ def collect_rollouts(
                 qwen_base_model=qwen_base_model,
                 qwen_temperature=qwen_temperature,
                 seed=seed,
-                max_cards=max_cards if max_cards is not None else 6,
+                max_cards=max_cards if max_cards is not None else 5,
                 lambda_=_lambda if _lambda is not None else 0.05,
                 beta=beta if beta is not None else 0.25,
                 manifest=manifest,
