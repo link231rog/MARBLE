@@ -139,11 +139,13 @@ def make_controller(
     controller_checkpoint: Optional[str] = None,
     ablation: Optional[str] = None,
     *,
+    worker_model: Optional[str] = None,
     qwen_base_model: Optional[str] = None,
     qwen_api_base: Optional[str] = None,
     qwen_api_key: Optional[str] = None,
     qwen_api_model: Optional[str] = None,
     qwen_temperature: float = 0.0,
+    **extra_kwargs: Any,
 ) -> Any:
     baseline = canonical_baseline(baseline)
     spec = baseline_spec(baseline)
@@ -157,7 +159,8 @@ def make_controller(
     elif spec.controller == "heuristic":
         controller = HeuristicController()
     elif spec.controller == "lts_binary":
-        controller = LTSStyleController()
+        judge_fn = _make_lts_judge(worker_model) if worker_model else None
+        controller = LTSStyleController(judge_fn=judge_fn)
     elif spec.controller == "local_policy":
         # unified learned controller: LocalPolicyController (linear policy).
         # Untrained (no checkpoint) -> argmax over zero weights -> absent.
@@ -169,53 +172,56 @@ def make_controller(
             else LocalPolicyController()
         )
     elif spec.controller in ("qwen_sft", "qwen_rl"):
-        from marble.controllers.qwen_lora import (
-            api_generate_fn,
-            local_generate_fn,
-            make_qwen_lora_controller,
-        )
-
-        base_model = (
-            qwen_base_model
-            or os.environ.get("MARBLE_QWEN_BASE_MODEL")
-            or "Qwen/Qwen3-4B-Instruct-2507"
-        )
-        api_base = qwen_api_base or os.environ.get("MARBLE_QWEN_API_BASE")
-        if api_base:
-            api_key = (
-                qwen_api_key
-                or os.environ.get("MARBLE_QWEN_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-                or os.environ.get("NVAPI_KEY")
-                or os.environ.get("MARBLE_API_KEY")
-            )
-            if not api_key:
-                raise RuntimeError(
-                    "Qwen endpoint mode needs --qwen-api-key or MARBLE_QWEN_API_KEY"
-                )
-            generate_fn = api_generate_fn(
-                api_base,
-                api_key,
-                qwen_api_model
-                or os.environ.get("MARBLE_QWEN_API_MODEL")
-                or base_model,
-            )
+        if controller_checkpoint and str(controller_checkpoint).endswith(".json"):
+            controller = LocalPolicyController.load(controller_checkpoint)
         else:
-            if not controller_checkpoint:
-                raise ValueError(
-                    f"{baseline} local runtime needs --controller-checkpoint "
-                    "pointing to a LoRA adapter, or --qwen-api-base"
-                )
-            generate_fn = local_generate_fn(
-                base_model, controller_checkpoint, temperature=qwen_temperature
+            from marble.controllers.qwen_lora import (
+                api_generate_fn,
+                local_generate_fn,
+                make_qwen_lora_controller,
             )
-        # Pass ablation kwargs (drop_fields) so input/schema ablations
-        # actually change the Qwen controller prompt.
-        qwen_kw: Dict[str, Any] = {}
-        if ablation:
-            _f, _o = parse_ablation(ablation)
-            qwen_kw = controller_kwargs(_f, _o)
-        controller = make_qwen_lora_controller(generate_fn, **qwen_kw)
+
+            base_model = (
+                qwen_base_model
+                or os.environ.get("MARBLE_QWEN_BASE_MODEL")
+                or "Qwen/Qwen3-4B-Instruct-2507"
+            )
+            api_base = qwen_api_base or os.environ.get("MARBLE_QWEN_API_BASE")
+            if api_base:
+                api_key = (
+                    qwen_api_key
+                    or os.environ.get("MARBLE_QWEN_API_KEY")
+                    or os.environ.get("OPENAI_API_KEY")
+                    or os.environ.get("NVAPI_KEY")
+                    or os.environ.get("MARBLE_API_KEY")
+                )
+                if not api_key:
+                    raise RuntimeError(
+                        "Qwen endpoint mode needs --qwen-api-key or MARBLE_QWEN_API_KEY"
+                    )
+                generate_fn = api_generate_fn(
+                    api_base,
+                    api_key,
+                    qwen_api_model
+                    or os.environ.get("MARBLE_QWEN_API_MODEL")
+                    or base_model,
+                )
+            else:
+                if not controller_checkpoint:
+                    raise ValueError(
+                        f"{baseline} local runtime needs --controller-checkpoint "
+                        "pointing to a LoRA adapter, or --qwen-api-base"
+                    )
+                generate_fn = local_generate_fn(
+                    base_model, controller_checkpoint, temperature=qwen_temperature
+                )
+            # Pass ablation kwargs (drop_fields) so input/schema ablations
+            # actually change the Qwen controller prompt.
+            qwen_kw: Dict[str, Any] = {}
+            if ablation:
+                _f, _o = parse_ablation(ablation)
+                qwen_kw = controller_kwargs(_f, _o)
+            controller = make_qwen_lora_controller(generate_fn, **qwen_kw)
     elif spec.controller == "memory_r1_crud":
         # R1's manager is a storage runtime selected by make_memory_runtime().
         controller = None
@@ -234,14 +240,14 @@ def make_governed(
     ablation: Optional[str] = None,
     **qwen_runtime: Optional[str],
 ) -> GovernedMemory:
-    # worker_model is only used by the Memory-R1 adapter, not governed controllers.
-    qwen_runtime.pop("worker_model", None)
+    worker_model = qwen_runtime.pop("worker_model", None)
     return GovernedMemory(
         MemoryBank(),
         make_controller(
             baseline,
             controller_checkpoint,
             ablation,
+            worker_model=str(worker_model) if worker_model else None,
             **qwen_runtime,
         ),
         trace=TraceLogger(str(trace_path)),
@@ -296,37 +302,58 @@ def make_memory_runtime(
 
 
 def _worker_completion(model: str, prompt: str, max_tokens: int) -> str:
-    """Use the experiment worker model for R1's adapted manager/distiller."""
+    """Use the experiment worker model for R1's adapted manager/distiller and LTS judge."""
     from marble.llms.model_prompting import model_prompting
 
-    response = model_prompting(
-        llm_model=model,
-        messages=[{"role": "user", "content": prompt}],
-        return_num=1,
-        max_token_num=max_tokens,
-        temperature=0.0,
-        top_p=None,
-        stream=None,
-    )[0]
-    return str(getattr(response, "content", "") or "")
+    try:
+        response = model_prompting(
+            llm_model=model,
+            messages=[{"role": "user", "content": prompt}],
+            return_num=1,
+            max_token_num=max_tokens,
+            temperature=0.0,
+            top_p=None,
+            stream=None,
+        )[0]
+        return str(getattr(response, "content", "") or "")
+    except Exception:
+        return ""
 
 
 def _make_r1_manager(worker_model: str):
+    """Memory-R1 CRUD Memory Manager (ACL 2026 Appendix C.1).
+
+    Uses the exact verbatim instructions and 4-operation schema (ADD, UPDATE, DELETE, NONE/NOOP)
+    specified in the original Memory-R1 paper.
+    """
     def manager(proposal, active):
         index = [
-            {"memory_id": item.memory_id, "title": item.title}
+            {"id": str(item.memory_id), "text": f"{item.title}: {item.raw_value[:256]}"}
             for item in active
         ]
+        retrieved_fact = f"{proposal.title}: {proposal.raw_value[:512]}"
         prompt = (
-            "Manage one task-scoped global memory store. Choose ADD for a new useful "
-            "memory, UPDATE to replace an active duplicate, DELETE for an active "
-            "memory made invalid by the proposal, or NOOP for noise. "
-            'Return only JSON: {"operation":"ADD|UPDATE|DELETE|NOOP","memory_id":'
-            'null|"active id"}.\n'
-            f"active: {json.dumps(index, ensure_ascii=False)}\n"
-            f"proposal title: {proposal.title}\nproposal value: {proposal.raw_value[:512]}"
+            "You are a smart memory manager which controls the memory of a system. "
+            "You can perform four operations: (1) add into the memory, (2) update the memory, "
+            "(3) delete from the memory, and (4) no change. Based on the above four operations, "
+            "the memory will change. Compare newly retrieved facts with the existing memory. "
+            "For each new fact, decide whether to: - ADD: Add it to the memory as a new element "
+            "- UPDATE: Update an existing memory element - DELETE: Delete an existing memory element "
+            "- NONE: Make no change (if the fact is already present or irrelevant).\n\n"
+            "1. **Add**: If the retrieved facts contain new information not present in the memory, "
+            "then you have to add it by generating a new ID in the id field.\n"
+            "2. **Update**: If the retrieved facts contain information that is already present in the memory "
+            "but the information is totally different, then you have to update it. If the retrieved fact contains "
+            "information that conveys the same thing as the memory, keep the version with more detail. "
+            "Important: When updating, keep the same ID and preserve old_memory.\n"
+            "3. **Delete**: If the retrieved facts contain information that contradicts the memory, delete it. "
+            "When deleting, return the same IDs — do not generate new IDs.\n"
+            "4. **No Change**: If the retrieved facts are already present, make no change.\n\n"
+            f"Old Memory: {json.dumps(index, ensure_ascii=False)}\n"
+            f"Retrieved facts: {json.dumps([retrieved_fact], ensure_ascii=False)}\n\n"
+            'Return JSON only: {"event": "ADD|UPDATE|DELETE|NONE", "id": null|"existing id"}'
         )
-        raw = _worker_completion(worker_model, prompt, max_tokens=64)
+        raw = _worker_completion(worker_model, prompt, max_tokens=128)
         decision = parse_crud_decision(raw, active)
         decision.update(
             manager_input_tokens=token_count(prompt),
@@ -339,15 +366,69 @@ def _make_r1_manager(worker_model: str):
 
 
 def _make_r1_distiller(worker_model: str):
+    """Memory-R1 Answer Agent Distillation (ACL 2026 Appendix C.2).
+
+    Instructs the model to select and distill only evidence useful for answering
+    the task, respecting timestamps and factual fidelity.
+    """
     def distill(task_text: str, notes: List[str]) -> str:
         prompt = (
-            "Select and compact only evidence useful for answering the task. "
-            "Do not add facts. Return plain concise notes.\n"
-            f"task: {task_text}\nmemories:\n" + "\n".join(notes)
+            "You are an intelligent memory assistant tasked with retrieving accurate information "
+            "from task memories.\n"
+            "# CONTEXT: You have access to memories from agents in a collaborative task execution. "
+            "These memories contain timestamped information that may be relevant to answering the question.\n"
+            "# INSTRUCTIONS:\n"
+            "1. Carefully analyze all provided memories.\n"
+            "2. If the memories contain contradictory information, prioritize the most recent memory.\n"
+            "3. Select memories you found that are useful for answering the questions, and output them.\n"
+            "4. Distill and compact only evidence useful for answering the task. Do not add unsupported facts.\n"
+            "Return plain concise notes.\n\n"
+            f"Task: {task_text}\n"
+            "Memories:\n" + "\n".join(f"- {note}" for note in notes)
         )
-        return _worker_completion(worker_model, prompt, max_tokens=192)
+        return _worker_completion(worker_model, prompt, max_tokens=256)
 
     return distill
+
+
+def _make_lts_judge(worker_model: str):
+    """LTS-LLM admission judge (ICML 2026 §4.1).
+
+    Prompted decision by a frozen LLM deciding whether an intermediate step
+    produces reusable, globally useful findings that should be admitted into
+    the shared memory bank or discarded.
+    """
+    from marble.controllers.heuristic import _SHARED_SIGNALS
+
+    def judge(proposal: Any) -> bool:
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return bool(_SHARED_SIGNALS.search(proposal.title))
+        prompt = (
+            "You are the LTS (Learning to Share) Admission Controller for a parallel multi-agent system. "
+            "Decide whether the following intermediate step produces reusable, globally useful findings "
+            "that should be admitted to the shared memory bank to prevent redundant computation across teams.\n"
+            "- YES: Admit into shared memory (general finding, critical evidence, or reusable intermediate state)\n"
+            "- NO: Discard (transient local scratchpad, redundant observation, or noise)\n\n"
+            f"Step Summary: {proposal.title}\n"
+            f"Step Output: {proposal.raw_value[:512]}\n\n"
+            'Return JSON only: {"admit": true|false, "decision": "YES|NO"}'
+        )
+        raw = _worker_completion(worker_model, prompt, max_tokens=32)
+        match = re.search(r"\"(?:admit|decision)\"\s*:\s*(\"?\w+\"?)", raw, re.IGNORECASE)
+        if match:
+            val = match.group(1).replace('"', "").lower()
+            if val in {"true", "yes"}:
+                return True
+            if val in {"false", "no"}:
+                return False
+        raw_upper = raw.upper()
+        if "YES" in raw_upper or "TRUE" in raw_upper:
+            return True
+        if "NO" in raw_upper or "FALSE" in raw_upper:
+            return False
+        return bool(_SHARED_SIGNALS.search(proposal.title))
+
+    return judge
 
 
 def _make_mem0_manager(worker_model: str):
@@ -575,7 +656,8 @@ def run_task(
         if ":1" in val or "::1" in val:
             os.environ.pop(var, None)
 
-    tdir = Path(out_root) / baseline / task.benchmark / str(task.task_id)
+    out_root = Path(out_root).resolve()
+    tdir = (out_root / baseline / task.benchmark / str(task.task_id)).resolve()
     tdir.mkdir(parents=True, exist_ok=True)
 
     # Isolate database fixture writes into task output dir

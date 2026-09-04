@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
 
@@ -77,8 +77,15 @@ class LTSStyleController:
     """Binary sharing baseline: reject local notes, publish shared findings.
 
     This is an explicit ``absent/global`` policy following LTS (ICML 2026).
-    It never emits private memories.
+    It never emits private memories. Supports an optional LLM admission judge (LTS-LLM)
+    or deterministic signal rules as fast fallback.
     """
+
+    def __init__(
+        self,
+        judge_fn: Optional[Callable[[MemoryProposal], bool]] = None,
+    ) -> None:
+        self.judge_fn = judge_fn
 
     def decide(
         self,
@@ -90,6 +97,20 @@ class LTSStyleController:
             return MemoryTargetState(False, "absent")
         if title in {"empty observation", "none", "noop"} or "local" in title or "scratch" in title:
             return MemoryTargetState(False, "absent")
+
+        if self.judge_fn is not None:
+            try:
+                admitted = self.judge_fn(proposal)
+                if not admitted:
+                    return MemoryTargetState(False, "absent")
+                return MemoryTargetState(
+                    True,
+                    "global",
+                    supersedes=_find_supersedes(proposal, current_state),
+                )
+            except Exception:
+                pass  # Fall back to signal match
+
         if not _SHARED_SIGNALS.search(proposal.title):
             return MemoryTargetState(False, "absent")
         return MemoryTargetState(

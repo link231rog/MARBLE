@@ -74,3 +74,17 @@ def test_crud_parser_rejects_invalid_or_inactive_targets():
     assert parse_crud_decision(
         '{"operation":"UPDATE","memory_id":"p1"}', active
     ) == {"operation": "UPDATE", "memory_id": "p1"}
+    # Memory-R1 Appendix C.1 formats
+    assert parse_crud_decision(
+        '{"event":"NONE","id":"0"}', active
+    ) == {"operation": "NOOP", "memory_id": None}
+    assert parse_crud_decision(
+        '{"event":"UPDATE","id":"p1","text":"updated"}', active
+    ) == {"operation": "UPDATE", "memory_id": "p1"}
+    assert parse_crud_decision(
+        '{"memory":[{"id":"0","event":"NONE"},{"id":"1","text":"fact","event":"ADD"}]}', active
+    ) == {"operation": "ADD", "memory_id": None}
+    assert parse_crud_decision(
+        '{"memory":[{"id":"p1","text":"updated","event":"UPDATE","old_memory":"old"}]}', active
+    ) == {"operation": "UPDATE", "memory_id": "p1"}
+

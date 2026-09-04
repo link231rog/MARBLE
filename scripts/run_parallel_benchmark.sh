@@ -30,6 +30,7 @@ CONCURRENCY=8
 ENABLE_COMM_GOV=""
 DRY_RUN=""
 OUT_DIR=""
+CONTROLLER_CHECKPOINT=""
 
 PORT_OFFSET=0
 
@@ -54,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--concurrency)
             CONCURRENCY="$2"
+            shift 2
+            ;;
+        --controller-checkpoint)
+            CONTROLLER_CHECKPOINT="$2"
             shift 2
             ;;
         --port-offset)
@@ -93,6 +98,7 @@ echo "  Benchmark:   $BENCHMARK_TARGET"
 echo "  Max Cards:   $MAX_CARDS"
 echo "  Port Offset: $PORT_OFFSET"
 echo "  Output Dir:  $OUT_DIR"
+[ -n "$CONTROLLER_CHECKPOINT" ] && echo "  Checkpoint:  $CONTROLLER_CHECKPOINT"
 echo "======================================================================"
 
 # Parse API keys and endpoints for multi-provider rotation
@@ -177,6 +183,10 @@ launch_db_worker() {
         [ -n "$q_model" ] && export MARBLE_QWEN_API_MODEL="$q_model"
         [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
+        EXTRA_FLAGS=()
+        [ -n "$ENABLE_COMM_GOV" ] && EXTRA_FLAGS+=("$ENABLE_COMM_GOV")
+        [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_FLAGS+=(--controller-checkpoint "$CONTROLLER_CHECKPOINT")
+
         echo "[DB Worker $worker_id] Launching Database Task $task_id (Port: $db_port)..."
         if [ -n "$DRY_RUN" ]; then
             echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark database --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
@@ -194,7 +204,7 @@ launch_db_worker() {
                 --lambda 0.15 \
                 --beta 0.25 \
                 --task-timeout 900 \
-                $ENABLE_COMM_GOV \
+                "${EXTRA_FLAGS[@]}" \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"
 
             docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true
@@ -217,6 +227,10 @@ launch_research_worker() {
         [ -n "$q_model" ] && export MARBLE_QWEN_API_MODEL="$q_model"
         [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
+        EXTRA_FLAGS=()
+        [ -n "$ENABLE_COMM_GOV" ] && EXTRA_FLAGS+=("$ENABLE_COMM_GOV")
+        [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_FLAGS+=(--controller-checkpoint "$CONTROLLER_CHECKPOINT")
+
         echo "[Research Worker $worker_id] Launching Research Task $task_id..."
         if [ -n "$DRY_RUN" ]; then
             echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark research --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
@@ -234,7 +248,7 @@ launch_research_worker() {
                 --lambda 0.15 \
                 --beta 0.25 \
                 --task-timeout 900 \
-                $ENABLE_COMM_GOV \
+                "${EXTRA_FLAGS[@]}" \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"
         fi
         echo "[Research Worker $worker_id] Finished Research Task $task_id."

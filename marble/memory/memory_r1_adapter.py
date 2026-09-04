@@ -149,25 +149,49 @@ def parse_crud_decision(
     text = (raw or "").strip()
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
-        text = match.group(1)
-    else:
-        match_brace = re.search(r"\{[^{}]*\"operation\"[^{}]*\}", text, re.DOTALL)
-        if match_brace:
-            text = match_brace.group(0)
+        text = match.group(1).strip()
 
+    parsed = None
     try:
         parsed = json.loads(text)
     except (TypeError, json.JSONDecodeError):
-        return {"operation": "NOOP", "memory_id": None}
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                parsed = json.loads(text[start : end + 1])
+            except Exception:
+                pass
 
     if not isinstance(parsed, dict):
         return {"operation": "NOOP", "memory_id": None}
 
-    operation = str(parsed.get("operation", "NOOP")).strip().upper()
+    # Handle Memory-R1 Appendix C.1 format: {"memory": [{"id": ..., "event": ...}, ...]}
+    if isinstance(parsed.get("memory"), list):
+        items = parsed["memory"]
+        action_item = None
+        for it in items:
+            if isinstance(it, dict):
+                ev = str(it.get("event") or it.get("operation") or "").strip().upper()
+                if ev in {"ADD", "UPDATE", "DELETE"}:
+                    action_item = it
+                    break
+        if action_item:
+            parsed = action_item
+        elif items and isinstance(items[-1], dict):
+            parsed = items[-1]
+
+    operation = str(
+        parsed.get("operation") or parsed.get("event") or "NOOP"
+    ).strip().upper()
+    if operation == "NONE":
+        operation = "NOOP"
     if operation not in {"ADD", "UPDATE", "DELETE", "NOOP"}:
         return {"operation": "NOOP", "memory_id": None}
 
     memory_id = parsed.get("memory_id")
+    if memory_id is None:
+        memory_id = parsed.get("id")
     if memory_id is not None:
         memory_id = str(memory_id).strip()
         if memory_id.lower() in {"null", "none", ""}:

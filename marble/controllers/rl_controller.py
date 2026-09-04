@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any, Dict, List
 
 from marble.controllers.local_policy import VISIBILITIES, LocalPolicyController, features
@@ -94,7 +95,17 @@ def train_rl(
         episodes += 1
         # real reward loop: prefer per-episode task_score (from run summary) over
         # the fixed offline placeholder; center advantages on the split mean.
-        ts = task_scores[i] if task_scores else r_episode
+        ts = r_episode
+        if task_scores and i < len(task_scores):
+            ts = task_scores[i]
+        else:
+            summary_p = Path(path).with_name("summary.json")
+            if summary_p.is_file():
+                try:
+                    with summary_p.open(encoding="utf-8") as sfh:
+                        ts = float(json.load(sfh).get("task_score", r_episode))
+                except Exception:
+                    pass
         credits = proposal_rewards(
             events, task_score=ts, same_task_baseline=same_task_baseline
         )
