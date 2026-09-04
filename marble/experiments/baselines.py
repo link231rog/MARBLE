@@ -36,6 +36,9 @@ MAIN_BASELINES: Tuple[str, ...] = (
     "amem_style",
     "memoryos_style",
     "memory_r1_style",
+    "g_memory_style",
+    "collabmem_style",
+    "copper_style",
     "ours_base",
     "ours_sft",
     "ours_rl",
@@ -84,6 +87,24 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
         uses_memory=True,
         requires_crud_manager=True,
     ),
+    "g_memory_style": BaselineSpec(
+        "g_memory_style",
+        controller="g_memory_graph",
+        uses_memory=True,
+        requires_crud_manager=True,
+    ),
+    "collabmem_style": BaselineSpec(
+        "collabmem_style",
+        controller="collabmem_bipartite",
+        uses_memory=True,
+        requires_crud_manager=True,
+    ),
+    "copper_style": BaselineSpec(
+        "copper_style",
+        controller="copper_reflection",
+        uses_memory=True,
+        requires_crud_manager=True,
+    ),
     "ours_base": BaselineSpec("ours_base", controller="qwen_sft", uses_memory=True),
     "ours_sft": BaselineSpec("ours_sft", controller="qwen_sft", uses_memory=True),
     "ours_rl": BaselineSpec("ours_rl", controller="qwen_rl", uses_memory=True),
@@ -102,11 +123,18 @@ ALIASES = {
     "a_mem": "amem_style",
     "memoryos": "memoryos_style",
     "memory_os": "memoryos_style",
+    "g_memory": "g_memory_style",
+    "gmemory": "g_memory_style",
+    "g_memory_graph": "g_memory_style",
+    "collabmem": "collabmem_style",
+    "collab_mem": "collabmem_style",
+    "copper": "copper_style",
     "qwen_base": "ours_base",
     "ours_prompted": "ours_base",
     "qwen_sft": "ours_sft",
     "qwen_rl": "ours_rl",
 }
+
 
 
 def canonical_baseline(name: str) -> str:

@@ -292,6 +292,24 @@ def make_memory_runtime(
         return MemoryOSAdapter(
             trace=TraceLogger(str(trace_path)),
         )
+    if baseline == "g_memory_style":
+        from marble.memory.mas_baselines import GMemoryAdapter
+
+        return GMemoryAdapter(
+            trace=TraceLogger(str(trace_path)),
+        )
+    if baseline == "collabmem_style":
+        from marble.memory.mas_baselines import CollabMemAdapter
+
+        return CollabMemAdapter(
+            trace=TraceLogger(str(trace_path)),
+        )
+    if baseline == "copper_style":
+        from marble.memory.mas_baselines import COPPERAdapter
+
+        return COPPERAdapter(
+            trace=TraceLogger(str(trace_path)),
+        )
     return make_governed(
         baseline,
         trace_path,
@@ -299,6 +317,7 @@ def make_memory_runtime(
         ablation,
         **qwen_runtime,
     )
+
 
 
 def _worker_completion(model: str, prompt: str, max_tokens: int) -> str:
