@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "date": "2026-09-04",
+  "description": "Chapter 2 Controller Evaluation Matrix: Two-Tier Protocol for Cross-Architecture and Scaling Law Ablations.",
+  "serving_protocol": "openai_compatible_api",
+  "api_env_mapping": {
+    "api_base_env": [
+      "MARBLE_CONTROLLER_API_BASE",
+      "MARBLE_QWEN_API_BASE"
+    ],
+    "api_key_env": [
+      "MARBLE_CONTROLLER_API_KEY",
+      "MARBLE_QWEN_API_KEY",
+      "OPENAI_API_KEY"
+    ],
+    "api_model_env": [
+      "MARBLE_CONTROLLER_API_MODEL",
+      "MARBLE_QWEN_API_MODEL"
+    ]
+  },
+  "tiers": {
+    "tier_1_core": {
+      "description": "Full Train + Test evaluation for the main paper table and reinforcement learning warm-up.",
+      "eval_splits": [
+        "train",
+        "test"
+      ],
+      "models": [
+        {
+          "id": "qwen3.5-4b-instruct",
+          "name": "Qwen/Qwen3.5-4B-Instruct",
+          "family": "qwen",
+          "parameters": "4B",
+          "role": "core_anchor",
+          "purpose": "Primary controller sweet spot balancing latency, context window, and zero-syntax-error JSON adherence."
+        }
+      ]
+    },
+    "tier_2_ablation": {
+      "description": "Test Split only (16 tasks: 8 DB + 8 Research) for cross-architecture and parameter scaling ablations.",
+      "eval_splits": [
+        "test"
+      ],
+      "models": [
+        {
+          "id": "llama-3.2-3b-instruct",
+          "name": "meta-llama/Llama-3.2-3B-Instruct",
+          "family": "llama",
+          "parameters": "3.2B",
+          "role": "parallel_peer",
+          "purpose": "Cross-architecture peer comparison: evaluate Meta LLaMA 3.2 family on memory governance."
+        },
+        {
+          "id": "phi-3.5-mini-instruct",
+          "name": "microsoft/Phi-3.5-mini-instruct",
+          "family": "phi",
+          "parameters": "3.8B",
+          "role": "parallel_peer",
+          "purpose": "Cross-architecture peer comparison: evaluate Microsoft synthetic-curated model on reasoning & JSON."
+        },
+        {
+          "id": "qwen3.5-2b-instruct",
+          "name": "Qwen/Qwen3.5-2B-Instruct",
+          "family": "qwen",
+          "parameters": "2B",
+          "role": "scaling_down",
+          "purpose": "Scaling law lower-bound: assess whether extreme edge lightweight model exhibits decision degradation."
+        },
+        {
+          "id": "qwen3.5-9b-instruct",
+          "name": "Qwen/Qwen3.5-9B-Instruct",
+          "family": "qwen",
+          "parameters": "9B",
+          "role": "scaling_mid",
+          "purpose": "Scaling law mid-tier: evaluate whether doubling parameters noticeably enhances memory pruning."
+        },
+        {
+          "id": "qwen3.5-27b-instruct",
+          "name": "Qwen/Qwen3.5-27B-Instruct",
+          "family": "qwen",
+          "parameters": "27B",
+          "role": "scaling_up",
+          "purpose": "Scaling law upper ceiling: detect whether governance accuracy plateaus (saturation analysis)."
+        }
+      ]
+    }
+  }
+}
