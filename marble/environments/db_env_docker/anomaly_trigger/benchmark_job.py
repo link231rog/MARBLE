@@ -17,7 +17,7 @@ class Database:
             user="test",
             password="Test123_456",
             host="localhost",
-            port=5432,
+            port=int(os.getenv("MARBLE_DB_PORT", "5432")),
         )
 
     def execute_sql(self, sql):

@@ -1,3 +1,4 @@
+import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -7,9 +8,11 @@ def obtain_slow_queries(
     username="test",
     password="Test123_456",
     database="sysbench",
-    port="5432",
+    port=None,
     top_k=10,
 ):
+    if port is None:
+        port = os.getenv("MARBLE_DB_PORT", "5432")
     try:
         connection = psycopg2.connect(
             user=username,

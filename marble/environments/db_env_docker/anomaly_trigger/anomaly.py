@@ -36,7 +36,8 @@ def restart_postgresql():
     # return
     try:
         os.chdir("..")
-        os.system("docker compose restart postgres_db")
+        project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
+        os.system(f"docker compose -p {project} restart postgres_db")
         print("PostgreSQL Service Rebooted")
     except Exception as e:
         print(f"Local command exec error: {e}")
@@ -237,7 +238,7 @@ def vacuum(threads, duration, ncolumns, nrows, colsize, table_name="table1"):
         user="test",
         password="Test123_456",
         host="localhost",
-        port="5432",
+        port=os.getenv("MARBLE_DB_PORT", "5432"),
     )
     cur = conn.cursor()
     # Create a new table

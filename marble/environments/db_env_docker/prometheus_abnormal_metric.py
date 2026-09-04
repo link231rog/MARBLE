@@ -9,10 +9,14 @@ import numpy as np
 import requests
 from yaml_utils import read_prometheus_metrics_yaml
 
+prom_port = os.getenv("MARBLE_PROM_PORT", "9090")
+node_port = os.getenv("MARBLE_NODE_PORT", "9100")
+pg_exp_port = os.getenv("MARBLE_PG_EXPORTER_PORT", "9187")
+
 PROMETHEUS_CONFIG = {
-    "api_url": "http://localhost:9090/",
-    "postgresql_exporter_instance": "localhost:9187",
-    "node_exporter_instance": "localhost:9100",
+    "api_url": f"http://localhost:{prom_port}/",
+    "postgresql_exporter_instance": f"localhost:{pg_exp_port}",
+    "node_exporter_instance": f"localhost:{node_port}",
 }
 
 prometheus_metrics = read_prometheus_metrics_yaml(

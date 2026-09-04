@@ -185,8 +185,15 @@ def check_consensus(environment_name: str, agents_results: List[Dict[str, Any]])
                 if re.search(rf"\b(cause|conclude|concluded|identified|bottleneck|anomaly)\b.*?\b{c}\b", text, re.IGNORECASE) or \
                    re.search(rf"\b{c}\b.*?\b(is the root cause|is the cause|identified)\b", text, re.IGNORECASE):
                     votes[c] = votes.get(c, 0) + 1
-        if any(cnt >= 3 for cnt in votes.values()):
-            return True
+        is_dual_cause = any("two of the following" in str(list(r_dict.values())[0]).lower() for r_dict in agents_results if r_dict)
+        if is_dual_cause:
+            # 双根因任务要求至少两个不同根因各自获得 >= 2 票，避免过早截断探索链
+            qualifying = [c for c, cnt in votes.items() if cnt >= 2]
+            if len(qualifying) >= 2:
+                return True
+        else:
+            if any(cnt >= 3 for cnt in votes.values()):
+                return True
     elif "Research" in str(environment_name):
         full_text = " ".join(str(list(r.values())[0]) for r in agents_results if r)
         if all(f"[Question {i}]" in full_text for i in range(1, 6)) or \

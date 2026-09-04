@@ -28,7 +28,8 @@ def split_sql_statements(sql: str) -> List[str]:
 def get_prometheus_metric_data(
     metric_name: str, start_time: float, end_time: float, step: int = 1
 ) -> List[List[Any]]:
-    prom_url = "http://localhost:9090/api/v1/query_range"
+    prom_port = os.getenv("MARBLE_PROM_PORT", "9090")
+    prom_url = f"http://localhost:{prom_port}/api/v1/query_range"
     params = {
         "query": metric_name,
         "start": start_time,
@@ -82,15 +83,16 @@ class DBEnvironment(BaseEnvironment):
         print(self.get_slow_query_handler())
 
     def start_docker_containers(self):
-        print("Starting Docker containers...")
+        project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
+        print(f"Starting Docker containers (project={project})...")
         subprocess.run(
-            ["docker", "compose", "down", "-v"],
+            ["docker", "compose", "-p", project, "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             shell=False,
             check=True,
         )
         subprocess.run(
-            ["docker", "compose", "up", "-d", "--remove-orphans"],
+            ["docker", "compose", "-p", project, "up", "-d", "--remove-orphans"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             check=True,
         )
@@ -102,12 +104,13 @@ class DBEnvironment(BaseEnvironment):
         init_sql = config.get("init_sql", None)
         test_sql = config.get("test_sql", None)
 
+        db_port = os.getenv("MARBLE_DB_PORT", "5432")
         connection = psycopg2.connect(
             user="test",
             password="Test123_456",
             database="sysbench",
             host="localhost",
-            port="5432",
+            port=db_port,
         )
         cursor = connection.cursor()
         connection.autocommit = True
@@ -515,13 +518,14 @@ class DBEnvironment(BaseEnvironment):
             }
 
     def query_db_handler(self, sql: str) -> Dict[str, Any]:
+        db_port = os.getenv("MARBLE_DB_PORT", "5432")
         try:
             connection = psycopg2.connect(
                 user="test",
                 password="Test123_456",
                 database="sysbench",
                 host="localhost",
-                port="5432",
+                port=db_port,
             )
             cursor = connection.cursor()
             sql_queries = split_sql_statements(sql)
@@ -616,7 +620,8 @@ class DBEnvironment(BaseEnvironment):
         return f"Here are the commands that took longest time:\n{obtain_slow_queries()}"
 
     def get_raw_alerts(self) -> dict:
-        prom_url = "http://localhost:9090/api/v1/alerts"
+        prom_port = os.getenv("MARBLE_PROM_PORT", "9090")
+        prom_url = f"http://localhost:{prom_port}/api/v1/alerts"
         response = requests.get(prom_url)
         if response.status_code == 200:
             data = response.json()
@@ -632,13 +637,14 @@ class DBEnvironment(BaseEnvironment):
             )
 
     def check_db_connection(self) -> bool:
+        db_port = os.getenv("MARBLE_DB_PORT", "5432")
         try:
             connection = psycopg2.connect(
                 user="test",
                 password="Test123_456",
                 database="sysbench",
                 host="localhost",
-                port="5432",
+                port=db_port,
             )
             print("Database is up!")
             connection.close()
@@ -648,8 +654,9 @@ class DBEnvironment(BaseEnvironment):
             return False
 
     def terminate(self) -> None:
+        project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
         subprocess.run(
-            ["docker", "compose", "down"],
+            ["docker", "compose", "-p", project, "down"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             check=True,
         )

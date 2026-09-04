@@ -9,6 +9,7 @@ def createdatabase(name):
         user=DB_CONFIG["user"],  # 替换为你的数据库用户名
         password=DB_CONFIG["password"],  # 替换为你的数据库密码
         host=DB_CONFIG["host"],  # 替换为你的数据库主机地址
+        port=DB_CONFIG.get("port", 5432),
     )
     conn.autocommit = True
     # 创建一个数据库游标
