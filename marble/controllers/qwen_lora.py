@@ -39,18 +39,26 @@ def api_generate_fn(
         else float(os.environ.get("MARBLE_CONTROLLER_TIMEOUT", "60.0"))
     )
     client = OpenAI(base_url=api_base, api_key=api_key, timeout=eff_timeout)
+    disable_thinking = (
+        "siliconflow" in api_base
+        or os.environ.get("MARBLE_CONTROLLER_DISABLE_THINKING", "") in ("1", "true", "True")
+    )
 
     def gen(prompt: str) -> str:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.0,
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+        }
+        if disable_thinking:
+            kwargs["extra_body"] = {"enable_thinking": False}
+        resp = client.chat.completions.create(**kwargs)
         record_successful_completion(resp)
         return (resp.choices[0].message.content or "").strip()
 
     return gen
+
 
 
 def local_generate_fn(
