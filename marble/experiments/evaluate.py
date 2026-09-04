@@ -277,7 +277,7 @@ def evaluate_run_root(
         }
     root = os.fspath(run_root)
     rows: List[Dict[str, Any]] = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         if "summary.json" in filenames:
             row = evaluate_task_dir(dirpath)
             if allowed is not None and (

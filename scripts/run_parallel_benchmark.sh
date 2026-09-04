@@ -31,6 +31,9 @@ ENABLE_COMM_GOV=""
 DRY_RUN=""
 OUT_DIR=""
 CONTROLLER_CHECKPOINT=""
+LAMBDA="0.15"
+BETA="0.25"
+ABLATION=""
 
 PORT_OFFSET=0
 
@@ -59,6 +62,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --controller-checkpoint)
             CONTROLLER_CHECKPOINT="$2"
+            shift 2
+            ;;
+        --ablation)
+            ABLATION="$2"
+            shift 2
+            ;;
+        --lambda)
+            LAMBDA="$2"
+            shift 2
+            ;;
+        --beta)
+            BETA="$2"
             shift 2
             ;;
         --port-offset)
@@ -183,9 +198,10 @@ launch_db_worker() {
         [ -n "$q_model" ] && export MARBLE_QWEN_API_MODEL="$q_model"
         [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
-        EXTRA_FLAGS=()
-        [ -n "$ENABLE_COMM_GOV" ] && EXTRA_FLAGS+=("$ENABLE_COMM_GOV")
-        [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_FLAGS+=(--controller-checkpoint "$CONTROLLER_CHECKPOINT")
+        EXTRA_ARGS=""
+        [ -n "$ENABLE_COMM_GOV" ] && EXTRA_ARGS="$EXTRA_ARGS $ENABLE_COMM_GOV"
+        [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_ARGS="$EXTRA_ARGS --controller-checkpoint $CONTROLLER_CHECKPOINT"
+        [ -n "$ABLATION" ] && EXTRA_ARGS="$EXTRA_ARGS --ablation $ABLATION"
 
         echo "[DB Worker $worker_id] Launching Database Task $task_id (Port: $db_port)..."
         if [ -n "$DRY_RUN" ]; then
@@ -201,10 +217,10 @@ launch_db_worker() {
                 --max-iterations 5 \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
-                --lambda 0.15 \
-                --beta 0.25 \
+                --lambda "$LAMBDA" \
+                --beta "$BETA" \
                 --task-timeout 900 \
-                "${EXTRA_FLAGS[@]}" \
+                $EXTRA_ARGS \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"
 
             docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true
@@ -227,9 +243,10 @@ launch_research_worker() {
         [ -n "$q_model" ] && export MARBLE_QWEN_API_MODEL="$q_model"
         [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
-        EXTRA_FLAGS=()
-        [ -n "$ENABLE_COMM_GOV" ] && EXTRA_FLAGS+=("$ENABLE_COMM_GOV")
-        [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_FLAGS+=(--controller-checkpoint "$CONTROLLER_CHECKPOINT")
+        EXTRA_ARGS=""
+        [ -n "$ENABLE_COMM_GOV" ] && EXTRA_ARGS="$EXTRA_ARGS $ENABLE_COMM_GOV"
+        [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_ARGS="$EXTRA_ARGS --controller-checkpoint $CONTROLLER_CHECKPOINT"
+        [ -n "$ABLATION" ] && EXTRA_ARGS="$EXTRA_ARGS --ablation $ABLATION"
 
         echo "[Research Worker $worker_id] Launching Research Task $task_id..."
         if [ -n "$DRY_RUN" ]; then
@@ -245,10 +262,10 @@ launch_research_worker() {
                 --max-iterations 5 \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
-                --lambda 0.15 \
-                --beta 0.25 \
+                --lambda "$LAMBDA" \
+                --beta "$BETA" \
                 --task-timeout 900 \
-                "${EXTRA_FLAGS[@]}" \
+                $EXTRA_ARGS \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"
         fi
         echo "[Research Worker $worker_id] Finished Research Task $task_id."
