@@ -32,7 +32,11 @@ MAIN_BASELINES: Tuple[str, ...] = (
     "no_memory",
     "global_add_all",
     "lts_style",
+    "mem0_style",
+    "amem_style",
+    "memoryos_style",
     "memory_r1_style",
+    "ours_base",
     "ours_sft",
     "ours_rl",
 )
@@ -56,6 +60,24 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
         "global_add_all", controller="global_add_all", uses_memory=True
     ),
     "lts_style": BaselineSpec("lts_style", controller="lts_binary", uses_memory=True),
+    "mem0_style": BaselineSpec(
+        "mem0_style",
+        controller="mem0_crud",
+        uses_memory=True,
+        requires_crud_manager=True,
+    ),
+    "amem_style": BaselineSpec(
+        "amem_style",
+        controller="amem_linking",
+        uses_memory=True,
+        requires_crud_manager=True,
+    ),
+    "memoryos_style": BaselineSpec(
+        "memoryos_style",
+        controller="memoryos_paging",
+        uses_memory=True,
+        requires_crud_manager=True,
+    ),
     "memory_r1_style": BaselineSpec(
         "memory_r1_style",
         controller="memory_r1_crud",
@@ -75,6 +97,11 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
 
 ALIASES = {
     "global_always": "global_add_all",
+    "mem0": "mem0_style",
+    "amem": "amem_style",
+    "a_mem": "amem_style",
+    "memoryos": "memoryos_style",
+    "memory_os": "memoryos_style",
     "qwen_base": "ours_base",
     "ours_prompted": "ours_base",
     "qwen_sft": "ours_sft",

@@ -255,7 +255,7 @@ def make_memory_runtime(
     ablation: Optional[str] = None,
     **qwen_runtime: Optional[str],
 ) -> Any:
-    """Build the storage runtime for either governed or R1-style methods."""
+    """Build the storage runtime for governed, classical, or R1-style methods."""
     baseline = canonical_baseline(baseline)
     if baseline == "memory_r1_style":
         worker_model = str(qwen_runtime.pop("worker_model", "") or DEFAULT_WORKER_MODEL)
@@ -264,6 +264,27 @@ def make_memory_runtime(
             trace=TraceLogger(str(trace_path)),
             manager=_make_r1_manager(worker_model),
             distill_fn=_make_r1_distiller(worker_model),
+        )
+    if baseline == "mem0_style":
+        from marble.memory.classical_baselines import Mem0Adapter
+
+        worker_model = str(qwen_runtime.pop("worker_model", "") or "")
+        manager_fn = _make_mem0_manager(worker_model) if worker_model else None
+        return Mem0Adapter(
+            trace=TraceLogger(str(trace_path)),
+            manager_fn=manager_fn,
+        )
+    if baseline == "amem_style":
+        from marble.memory.classical_baselines import AMemAdapter
+
+        return AMemAdapter(
+            trace=TraceLogger(str(trace_path)),
+        )
+    if baseline == "memoryos_style":
+        from marble.memory.classical_baselines import MemoryOSAdapter
+
+        return MemoryOSAdapter(
+            trace=TraceLogger(str(trace_path)),
         )
     return make_governed(
         baseline,
@@ -327,6 +348,35 @@ def _make_r1_distiller(worker_model: str):
         return _worker_completion(worker_model, prompt, max_tokens=192)
 
     return distill
+
+
+def _make_mem0_manager(worker_model: str):
+    """In-context Mem0-style manager performing CRUD operations via worker prompt."""
+    from marble.memory.memory_r1_adapter import parse_crud_decision
+
+    def manager(proposal, active):
+        index = [
+            {"memory_id": item.memory_id, "title": item.title, "value": item.raw_value[:256]}
+            for item in active
+        ]
+        prompt = (
+            "You are the Mem0 memory manager. Analyze the incoming observation and existing memories. "
+            "Choose ADD if it contains new facts, UPDATE if it refines an existing memory (specify its memory_id), "
+            "DELETE if it contradicts an existing memory, or NOOP if it is redundant or irrelevant. "
+            'Return JSON only: {"operation": "ADD|UPDATE|DELETE|NOOP", "memory_id": null|"existing_id"}.\n'
+            f"Existing memories: {json.dumps(index, ensure_ascii=False)}\n"
+            f"New observation: {proposal.title}: {proposal.raw_value[:512]}"
+        )
+        raw = _worker_completion(worker_model, prompt, max_tokens=64)
+        decision = parse_crud_decision(raw, active)
+        decision.update(
+            manager_input_tokens=token_count(prompt),
+            manager_output_tokens=token_count(raw),
+            manager_api_calls=1,
+        )
+        return decision
+
+    return manager
 
 
 # --------------------------------------------------------------------- config

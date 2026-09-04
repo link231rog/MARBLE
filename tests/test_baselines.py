@@ -13,7 +13,11 @@ def test_main_baselines_match_frozen_experiment_matrix():
         "no_memory",
         "global_add_all",
         "lts_style",
+        "mem0_style",
+        "amem_style",
+        "memoryos_style",
         "memory_r1_style",
+        "ours_base",
         "ours_sft",
         "ours_rl",
     )
