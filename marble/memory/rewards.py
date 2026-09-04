@@ -59,21 +59,32 @@ def proposal_rewards(
     same_task_baseline: float = 0.0,
     beta: float | None = None,
     lambda_: float | None = None,
+    outcome_gated: bool = True,
+    pass_at_1: float | None = None,
+    target_card_budget: int = 12,
+    gamma_density: float = 0.02,
 ) -> Dict[str, float]:
-    """G_i per stored proposal from one episode's trace events (doc §Reward).
+    """G_i per stored proposal from one episode's trace events (doc §Reward, Chapter 3).
 
     A_e = task_score - same_task_baseline (same-task relative advantage).
-    With no comparable rollout, pass same_task_baseline=0 (no advantage signal).
+    With outcome_gated=True (2025 RLVR standard), non-owner collaboration bonus (1+beta)
+    is only awarded if the task succeeds (pass_at_1 >= 1.0 or task_score >= 1.0) and advantage > 0.
+    SimPO-style density penalty gamma_density * (active_cards - budget)/budget is subtracted
+    when active global memory cards exceed target_card_budget.
     """
     b = BETA if beta is None else beta
     lam = LAMBDA if lambda_ is None else lambda_
     stored: Dict[str, Dict[str, Any]] = {}
+    global_cards_count = 0
     for ev in events:
         if ev.get("event") != "memory_decision":
             continue
         mid = ev.get("memory_id")
         if not mid:
             continue
+        target = ev.get("target") or {}
+        if target.get("visibility") == "global":
+            global_cards_count += 1
         proposal = ev["proposal"]
         stored[mid] = {
             "owner": proposal["agent_id"],
@@ -85,16 +96,29 @@ def proposal_rewards(
             readers.setdefault(ev["memory_id"], []).append(ev["reader_id"])
 
     advantage = task_score - same_task_baseline
+
+    # SimPO-style memory density / capacity regularization (Chapter 3 §3.2)
+    density_penalty = 0.0
+    if global_cards_count > target_card_budget and target_card_budget > 0:
+        density_penalty = gamma_density * (global_cards_count - target_card_budget) / target_card_budget
+
+    # RLVR Outcome Gating: only successful episodes get collaboration multiplier (Chapter 3 §2.2)
+    is_success = (pass_at_1 >= 1.0) if (pass_at_1 is not None) else (task_score >= 1.0)
+
     credits: Dict[str, float] = {}
     for mid, info in stored.items():
         cost = info["tokens"] / _TOKEN_BUDGET
         was_read = mid in readers
         if not was_read:
-            credits[mid] = -lam * cost
+            credits[mid] = -lam * cost - density_penalty
             continue
         non_owner = any(r != info["owner"] for r in readers[mid])
-        mult = 1 + b * (1 if non_owner else 0)
+        if outcome_gated and (not is_success or advantage <= 0):
+            mult = 1.0
+        else:
+            mult = 1.0 + b * (1 if non_owner else 0)
         # A memory receives at most one reuse credit; repeated reads only affect
         # the diagnostic trace, never the training signal.
-        credits[mid] = advantage * mult - lam * cost
+        credits[mid] = advantage * mult - lam * cost - density_penalty
     return credits
+

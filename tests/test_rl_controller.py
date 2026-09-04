@@ -66,3 +66,19 @@ def test_train_rl_uses_real_task_scores(tmp_path):
                      task_scores=[0.0, 1.0], same_task_baseline=0.5)
     assert stats["episodes"] == 2 and stats["updates"] > 0
     assert LocalPolicyController.load(str(out)) is not None
+
+
+def test_train_rl_warmstart_and_anchor(tmp_path):
+    init_ctrl = LocalPolicyController()
+    init_ctrl.weights["global"]["shared_signal"] = 5.0
+    init_path = tmp_path / "sft_init.json"
+    init_ctrl.save(str(init_path))
+
+    trace = _trace(tmp_path)
+    out_path = tmp_path / "rl_anchored.json"
+    stats = train_rl([trace], str(out_path), init_checkpoint=str(init_path),
+                     epochs=3, anchor_coeff=0.1)
+    assert stats["updates"] > 0
+    loaded = LocalPolicyController.load(str(out_path))
+    assert loaded.weights["global"]["shared_signal"] > 2.0
+

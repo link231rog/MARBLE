@@ -184,6 +184,12 @@ if __name__ == "__main__":
                              "task_score for the RL credit loop")
     parser.add_argument("--base-model", default="Qwen/Qwen3-4B-Instruct-2507",
                         help="base model for Qwen LoRA training")
+    parser.add_argument("--outcome-gated", action="store_true", default=True,
+                        help="RLVR outcome-gating on auxiliary collaboration bonuses")
+    parser.add_argument("--target-card-budget", type=int, default=12,
+                        help="SimPO card budget threshold for density penalty")
+    parser.add_argument("--anchor-coeff", type=float, default=0.005,
+                        help="SFT anchor coefficient to prevent covariate drift")
     args = parser.parse_args()
     if args.mode in ("sft", "qwen_sft", "sft-qwen"):
         trace_paths = discover_sft_traces(
@@ -226,8 +232,19 @@ if __name__ == "__main__":
                 with open(rp, encoding="utf-8") as fh:
                     task_scores.append(float(json.load(fh).get("task_score", 0.0)))
             baseline = sum(task_scores) / len(task_scores) if task_scores else 0.0
-        train_rl(trace_paths, args.out, init_checkpoint=args.init,
-                 epochs=args.epochs, lr=0.05, r_episode=args.r_episode,
-                 task_scores=task_scores, same_task_baseline=baseline)
+        train_rl(
+            trace_paths,
+            args.out,
+            init_checkpoint=args.init,
+            epochs=args.epochs,
+            lr=0.05,
+            r_episode=args.r_episode,
+            task_scores=task_scores,
+            same_task_baseline=baseline,
+            outcome_gated=args.outcome_gated,
+            target_card_budget=args.target_card_budget,
+            anchor_coeff=args.anchor_coeff,
+        )
     else:
         train(trace_paths, args.out, epochs=args.epochs)
+

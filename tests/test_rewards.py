@@ -71,3 +71,38 @@ def test_proposal_rewards_owner_read_zero_advantage(tmp_path):
     # advantage 0 -> credit is just -lambda*cost
     expected = -0.05 * token_count("only mine") / 4096
     assert abs(credits[item.memory_id] - expected) < 1e-9
+
+
+def test_proposal_rewards_rlvr_outcome_gating_blocks_failed_task(tmp_path):
+    events, m1, m2 = _events(tmp_path)
+    # Failed task (score 0.6 < 1.0) with positive advantage:
+    # With outcome_gated=True, non-owner reads get mult=1.0 (no beta bonus)
+    credits_gated = proposal_rewards(events, task_score=0.6, same_task_baseline=0.0, outcome_gated=True)
+    expected_gated = 0.6 * 1.0 - 0.05 * token_count("alpha beta gamma") / 4096
+    assert abs(credits_gated[m1.memory_id] - expected_gated) < 1e-9
+
+    # Without outcome gating, proxy reward hacking occurs (mult = 1 + 0.25 = 1.25)
+    credits_ungated = proposal_rewards(events, task_score=0.6, same_task_baseline=0.0, outcome_gated=False)
+    expected_ungated = 0.6 * 1.25 - 0.05 * token_count("alpha beta gamma") / 4096
+    assert abs(credits_ungated[m1.memory_id] - expected_ungated) < 1e-9
+    assert credits_ungated[m1.memory_id] > credits_gated[m1.memory_id]
+
+
+def test_proposal_rewards_simpo_density_penalty():
+    # 20 global memory decisions exceeding target_card_budget=10
+    events = []
+    for i in range(20):
+        events.append({
+            "event": "memory_decision",
+            "memory_id": f"m{i}",
+            "target": {"visibility": "global"},
+            "proposal": {"agent_id": "a1", "raw_value": "test card"},
+        })
+    credits = proposal_rewards(events, task_score=1.0, same_task_baseline=0.0,
+                               target_card_budget=10, gamma_density=0.04)
+    # unread cards incur -lambda*cost - density_penalty
+    # density_penalty = 0.04 * (20 - 10) / 10 = 0.04
+    cost = token_count("test card") / 4096
+    expected = -0.05 * cost - 0.04
+    assert abs(credits["m0"] - expected) < 1e-9
+
