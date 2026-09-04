@@ -62,6 +62,7 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
         uses_memory=True,
         requires_crud_manager=True,
     ),
+    "ours_base": BaselineSpec("ours_base", controller="qwen_sft", uses_memory=True),
     "ours_sft": BaselineSpec("ours_sft", controller="qwen_sft", uses_memory=True),
     "ours_rl": BaselineSpec("ours_rl", controller="qwen_rl", uses_memory=True),
     # Auxiliary diagnostics are intentionally excluded from MAIN_BASELINES.
@@ -74,6 +75,8 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
 
 ALIASES = {
     "global_always": "global_add_all",
+    "qwen_base": "ours_base",
+    "ours_prompted": "ours_base",
     "qwen_sft": "ours_sft",
     "qwen_rl": "ours_rl",
 }

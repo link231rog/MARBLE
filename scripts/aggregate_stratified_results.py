@@ -38,7 +38,12 @@ def main():
         except Exception:
             continue
 
-    baselines = ["single_agent", "no_memory", "global_add_all", "lts_style", "memory_r1_style"]
+    known_baselines = ["single_agent", "no_memory", "global_add_all", "lts_style", "memory_r1_style"]
+    all_methods = list(known_baselines)
+    for r in records:
+        m = r.get("method")
+        if m and m not in all_methods:
+            all_methods.append(m)
 
     print("=========================================================================================")
     print("                 PHASE 1 STRATIFIED BENCHMARK: PASS@1 & EFFICIENCY                       ")
@@ -56,7 +61,7 @@ def main():
 
             target_all = split_map[(benchmark, split_type)]
 
-            for b in baselines:
+            for b in all_methods:
                 b_records = [r for r in records if r.get("method") == b and r.get("benchmark") == benchmark and r.get("task_id") in target_all]
                 done_count = len(b_records)
                 total_target = len(target_all)

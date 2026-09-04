@@ -28,6 +28,7 @@ class MemoryStep:
         agent_role_map: Optional[Dict[str, str]] = None,
         baseline: str = "heuristic",
         worker_model: Optional[str] = None,
+        comm_governor: Optional[Any] = None,
     ):
         self.memory = memory
         # selector: "callable" (use selector_fn) or "top" (rank-order, no API)
@@ -43,6 +44,7 @@ class MemoryStep:
         self.agent_role_map = dict(agent_role_map or {})
         self.baseline = baseline
         self.worker_model = worker_model
+        self.comm_governor = comm_governor
         self._context_by_agent: Dict[str, Dict[str, int]] = {}
 
     # ------------------------------------------------------------------ before
@@ -57,6 +59,13 @@ class MemoryStep:
         cards = self.memory.visible_keys(
             reader_id=agent_id, task_id=self.task_id, query=task_text, top_k=eff_top_k
         )
+        if self.comm_governor is not None and cards:
+            task_text, was_compressed = self.comm_governor.filter_message(
+                "environment", agent_id, task_text,
+                active_memory_cards=[{"id": c.memory_id, "title": c.title} for c in cards]
+            )
+            if was_compressed:
+                print(f"[CommGovernor] [{self.task_id}][{agent_id}] compressed message echo", flush=True)
         trace = getattr(self.memory, "trace", None)
         if trace is not None and hasattr(trace, "log_exposure"):
             trace.log_exposure(

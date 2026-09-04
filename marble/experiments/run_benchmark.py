@@ -507,6 +507,7 @@ def run_task(
     manifest: Optional[str] = None,
     provider: Optional[str] = None,
     task_timeout: Optional[float] = 900.0,
+    enable_comm_governor: bool = False,
 ) -> Dict[str, Any]:
     if lambda_ < 0:
         raise ValueError("lambda must be non-negative")
@@ -589,6 +590,7 @@ def run_task(
         "ablation": ablation,
         "manifest": manifest,
         "provider": provider,
+        "comm_governor": enable_comm_governor,
         "status": "ok",
         # spec §11.2/§11.3: record the exact models used, all non-empty
         "worker_model": cfg["llm"],
@@ -602,7 +604,7 @@ def run_task(
                     if baseline == "qwen_rl"
                     else f"qwen_sft({qwen_api_model or qwen_base_model or os.environ.get('MARBLE_QWEN_BASE_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'})"
                 )
-                if baseline in ("qwen_sft", "qwen_rl")
+                if baseline in ("qwen_sft", "qwen_rl", "ours_sft", "ours_rl", "ours_base", "qwen_base")
                 else baseline
             )
         ),
@@ -618,6 +620,7 @@ def run_task(
         (
             f"method={baseline}",
             f"ablation={ablation or 'none'}",
+            f"comm_gov={'on' if enable_comm_governor else 'off'}",
             f"retrieval={retriever}",
             f"max_cards={effective_max_cards}",
             f"max_reads_per_step={max_reads_per_step}",
@@ -663,6 +666,7 @@ def run_task(
             lambda_=lambda_,
             beta=beta,
             provider=provider,
+            enable_comm_governor=enable_comm_governor,
         )
         summary.update(metrics)
         if metrics.get("score_status") != "available":
@@ -736,6 +740,7 @@ def _run_real_episode(
     lambda_: float = 0.05,
     beta: float = 0.25,
     provider: str = "sensenova",
+    enable_comm_governor: bool = False,
 ) -> Dict[str, Any]:
     _require_worker_key(provider)
     import os
@@ -773,10 +778,14 @@ def _run_real_episode(
         for agent in task.agents
         if agent.get("agent_id")
     }
+    comm_gov = None
+    if enable_comm_governor or os.environ.get("MARBLE_ENABLE_COMM_GOVERNOR", "").lower() in ("1", "true"):
+        from marble.engine.communication_governor import CommunicationGovernor
+        comm_gov = CommunicationGovernor()
     harness = MemoryStep(
         mem, max_cards=eff_max_cards, max_reads_per_step=max_reads_per_step,
         selector="top", task_goal=task.task, agent_role_map=agent_role_map,
-        baseline=baseline, worker_model=cfg["llm"],
+        baseline=baseline, worker_model=cfg["llm"], comm_governor=comm_gov,
     )
     harness.task_id = str(task.task_id)
 
@@ -1063,6 +1072,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         default=float(os.environ.get("MARBLE_TASK_TIMEOUT", "900.0")),
         help="max execution time in seconds per task before raising timeout (default: 900.0)",
     )
+    ap.add_argument(
+        "--enable-comm-governor",
+        action="store_true",
+        default=os.environ.get("MARBLE_ENABLE_COMM_GOVERNOR", "").lower() in ("1", "true"),
+        help="enable CommunicationGovernor to compress echo-restatements between agents",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--out",
@@ -1112,6 +1127,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     run_id = f"{args.benchmark}_{args.baseline}"
     if args.ablation:
         run_id += f"_ablation-{args.ablation.replace(':', '_')}"
+    if args.enable_comm_governor:
+        run_id += "_commgov"
     if effective_seed is not None:
         run_id += f"_seed{effective_seed}"
     run_id += f"_cards{args.max_cards}_reads{args.max_reads_per_step}"
@@ -1144,6 +1161,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             manifest=args.manifest,
             provider=args.provider,
             task_timeout=args.task_timeout,
+            enable_comm_governor=args.enable_comm_governor,
         )
         print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 

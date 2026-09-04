@@ -44,6 +44,11 @@ def api_generate_fn(
         or os.environ.get("MARBLE_CONTROLLER_DISABLE_THINKING", "") in ("1", "true", "True")
     )
 
+    import time
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     def gen(prompt: str) -> str:
         kwargs: Dict[str, Any] = {
             "model": model,
@@ -53,9 +58,36 @@ def api_generate_fn(
         }
         if disable_thinking:
             kwargs["extra_body"] = {"enable_thinking": False}
-        resp = client.chat.completions.create(**kwargs)
-        record_successful_completion(resp)
-        return (resp.choices[0].message.content or "").strip()
+
+        max_retries = int(os.environ.get("MARBLE_CONTROLLER_MAX_RETRIES", "3"))
+        base_delay = float(os.environ.get("MARBLE_CONTROLLER_RETRY_DELAY", "2.0"))
+
+        last_err: Optional[Exception] = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = client.chat.completions.create(**kwargs)
+                record_successful_completion(resp)
+                content = (resp.choices[0].message.content or "").strip()
+                if content.startswith("```"):
+                    lines = content.splitlines()
+                    if lines and lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    content = "\n".join(lines).strip()
+                return content
+            except Exception as exc:
+                last_err = exc
+                if attempt < max_retries:
+                    sleep_s = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Controller API attempt %d failed (%s); retrying in %.1fs...",
+                        attempt + 1, exc, sleep_s
+                    )
+                    time.sleep(sleep_s)
+                else:
+                    raise last_err
+        return ""
 
     return gen
 
