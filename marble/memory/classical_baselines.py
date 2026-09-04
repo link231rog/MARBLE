@@ -39,6 +39,7 @@ class Mem0Item:
     source_agent: str
     step_index: int
     active: bool = True
+    visibility: str = "global"
     created_at: int = 0
     updated_at: int = 0
 
@@ -128,13 +129,14 @@ class Mem0Adapter:
                 res_item = self._items[target_id]
 
             if self.trace is not None:
-                self.trace.log({
-                    "event": "mem0_crud",
-                    "operation": op,
-                    "memory_id": target_id or (res_item.memory_id if res_item else None),
-                    "task_id": proposal.task_id,
-                    "agent_id": proposal.agent_id,
-                })
+                self.trace.log(
+                    "classical_memory_operation",
+                    operation=op,
+                    memory_id=target_id or (res_item.memory_id if res_item else None),
+                    task_id=proposal.task_id,
+                    agent_id=proposal.agent_id,
+                    proposal=proposal.__dict__,
+                )
             return res_item if res_item and res_item.active else None
 
     def visible_keys(
@@ -192,6 +194,7 @@ class AMemNote:
     tags: Set[str] = field(default_factory=set)
     links: Set[str] = field(default_factory=set)
     active: bool = True
+    visibility: str = "global"
     created_at: int = 0
     updated_at: int = 0
 
@@ -267,12 +270,15 @@ class AMemAdapter:
 
             self._notes[note_id] = note
             if self.trace is not None:
-                self.trace.log({
-                    "event": "amem_note_created",
-                    "memory_id": note_id,
-                    "task_id": proposal.task_id,
-                    "links": list(note.links),
-                })
+                self.trace.log(
+                    "classical_memory_operation",
+                    operation="ADD",
+                    memory_id=note_id,
+                    task_id=proposal.task_id,
+                    agent_id=proposal.agent_id,
+                    proposal=proposal.__dict__,
+                    links=list(note.links),
+                )
             return note
 
     def visible_keys(
@@ -347,6 +353,7 @@ class MemoryOSItem:
     tier: str  # "STM", "MTM", "LTM"
     heat: float = 1.0
     active: bool = True
+    visibility: str = "global"
     created_at: int = 0
     updated_at: int = 0
 
@@ -414,12 +421,15 @@ class MemoryOSAdapter:
                     self._check_mtm_capacity(proposal.task_id)
 
             if self.trace is not None:
-                self.trace.log({
-                    "event": "memoryos_submit",
-                    "memory_id": item_id,
-                    "task_id": proposal.task_id,
-                    "tier": "STM",
-                })
+                self.trace.log(
+                    "classical_memory_operation",
+                    operation="ADD",
+                    memory_id=item_id,
+                    task_id=proposal.task_id,
+                    agent_id=proposal.agent_id,
+                    proposal=proposal.__dict__,
+                    tier="STM",
+                )
             return item
 
     def _check_mtm_capacity(self, task_id: str) -> None:

@@ -106,7 +106,7 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Memory metrics from one memory_trace.jsonl (spec §13)."""
     decisions = [e for e in events if e.get("event") == "memory_decision"]
     r1_operations = [
-        e for e in events if e.get("event") == "memory_r1_operation"
+        e for e in events if e.get("event") in ("memory_r1_operation", "classical_memory_operation")
     ]
     stored = [e for e in decisions if e.get("memory_id")]
     total = len(stored)
