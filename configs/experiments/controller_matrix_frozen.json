@@ -1,7 +1,7 @@
 {
   "version": 1,
   "date": "2026-09-04",
-  "description": "Chapter 2 Controller Evaluation Matrix: Clean Qwen 3.5 Series on SiliconFlow (Zero-VRAM API Serving).",
+  "description": "Chapter 2 Controller Evaluation Matrix: User-Designated Qwen 3.5 Base Controller with Scaling & Parallel Ablations.",
   "serving_protocol": "openai_compatible_api",
   "api_env_mapping": {
     "api_base_env": [
@@ -10,8 +10,7 @@
     ],
     "api_key_env": [
       "MARBLE_CONTROLLER_API_KEY",
-      "MARBLE_QWEN_API_KEY",
-      "OPENAI_API_KEY"
+      "MARBLE_QWEN_API_KEY"
     ],
     "api_model_env": [
       "MARBLE_CONTROLLER_API_MODEL",
@@ -20,7 +19,7 @@
   },
   "tiers": {
     "tier_1_core": {
-      "description": "Full Train + Test evaluation for the main paper table and reinforcement learning warm-up.",
+      "description": "Base Controller: Full Train + Test evaluation for main paper baseline and RL cold start.",
       "eval_splits": [
         "train",
         "test"
@@ -29,15 +28,14 @@
         {
           "id": "qwen3.5-4b",
           "name": "Qwen/Qwen3.5-4B",
-          "family": "qwen",
           "parameters": "4B",
-          "role": "core_anchor",
-          "purpose": "Primary controller sweet spot: 0.58s latency, 262k context, strict zero-syntax-error JSON adherence."
+          "role": "base_controller",
+          "purpose": "User-designated Core Base Controller (0.58s latency, 262k context, strict zero-syntax-error JSON)."
         }
       ]
     },
     "tier_2_ablation": {
-      "description": "Test Split only (16 tasks: 8 DB + 8 Research) for cross-architecture and parameter scaling ablations.",
+      "description": "Ablation on Test Split (16 tasks: 8 DB + 8 Research) for parameter scaling analysis.",
       "eval_splits": [
         "test"
       ],
@@ -45,42 +43,16 @@
         {
           "id": "qwen3.5-9b",
           "name": "Qwen/Qwen3.5-9B",
-          "family": "qwen",
           "parameters": "9B",
-          "role": "scaling_mid",
-          "purpose": "Scaling law mid-tier: evaluate whether parameter increase enhances memory pruning precision."
+          "role": "scaling_larger",
+          "purpose": "Scale ablation: assess whether expanding parameters from 4B to 9B improves memory governance."
         },
         {
           "id": "qwen3.5-27b",
           "name": "Qwen/Qwen3.5-27B",
-          "family": "qwen",
           "parameters": "27B",
-          "role": "scaling_up",
-          "purpose": "Scaling law upper tier: analyze whether governance performance saturates at 27B."
-        },
-        {
-          "id": "qwen3.5-35b-a3b",
-          "name": "Qwen/Qwen3.5-35B-A3B",
-          "family": "qwen",
-          "parameters": "35B-A3B (MoE)",
-          "role": "scaling_moe",
-          "purpose": "Sparse MoE architecture comparison: test mixture-of-experts efficiency for discrete memory actions."
-        },
-        {
-          "id": "qwen3-8b",
-          "name": "Qwen/Qwen3-8B",
-          "family": "qwen",
-          "parameters": "8B",
-          "role": "generational_control",
-          "purpose": "Generational comparison: contrast Qwen 3.5 hybrid architecture against Qwen 3 standard attention."
-        },
-        {
-          "id": "qwen2.5-7b-instruct",
-          "name": "Qwen/Qwen2.5-7B-Instruct",
-          "family": "qwen",
-          "parameters": "7B",
-          "role": "generational_baseline",
-          "purpose": "Historical baseline anchor: evaluate evolution from Qwen 2.5 dense baseline to Qwen 3.5."
+          "role": "scaling_ceiling",
+          "purpose": "Scale ablation: test saturation ceiling of memory governance accuracy at 27B."
         }
       ]
     }
