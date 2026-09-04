@@ -369,8 +369,10 @@ def main(argv: List[str] | None = None) -> None:
             ),
             indent=2,
         ))
-    else:
+    elif os.path.exists(legacy):
         print(format_report(evaluate_run(args.run_dir)))
+    else:
+        print(json.dumps({"info": f"No task summary.json files found in {args.run_dir} (yet)"}))
 
 
 if __name__ == "__main__":

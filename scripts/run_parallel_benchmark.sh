@@ -110,17 +110,17 @@ get_worker_key() {
     fi
 }
 
-# Determine Task IDs based on Split
-if [ "$SPLIT" == "test" ]; then
-    DB_TASKS=(4 5 6 7 54 55 56 57)
-    RESEARCH_TASKS=(4 5 6 7 54 55 56 57)
-elif [ "$SPLIT" == "train" ]; then
-    DB_TASKS=(1 2 3 51 52 53)
-    RESEARCH_TASKS=(1 2 3 51 52 53)
-else
-    echo "Unsupported split: $SPLIT"
+# Determine Task IDs dynamically from frozen manifest based on Benchmark and Split
+read -r -a DB_TASKS <<< "$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='database'))")"
+read -r -a RESEARCH_TASKS <<< "$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='research'))")"
+
+if [ ${#DB_TASKS[@]} -eq 0 ] && [ ${#RESEARCH_TASKS[@]} -eq 0 ]; then
+    echo "Error: No tasks found in manifest '$MANIFEST' for split '$SPLIT'"
     exit 1
 fi
+echo "Loaded Tasks from Manifest:"
+echo "  Database Tasks: ${DB_TASKS[*]}"
+echo "  Research Tasks: ${RESEARCH_TASKS[*]}"
 
 # ------------------------------------------------------------------------------
 # 1. Run Database Tasks (Sandboxed Docker per worker)
@@ -149,25 +149,29 @@ if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "database" ]; t
             [ -n "$q_key" ] && export MARBLE_QWEN_API_KEY="$q_key"
             [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
-            echo "[Worker $worker_id] Starting Database Task $task_id (Port: $db_port)..."
-            $UV run python -u -m marble.experiments.run_benchmark \
-                --benchmark database \
-                --manifest "$MANIFEST" \
-                --split "$SPLIT" \
-                --task-ids "$task_id" \
-                --baseline "$BASELINE" \
-                --seed 42 \
-                --max-iterations 5 \
-                --retrieval visible_k \
-                --max-cards "$MAX_CARDS" \
-                --lambda 0.15 \
-                --beta 0.25 \
-                --task-timeout 900 \
-                $ENABLE_COMM_GOV \
-                --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"
+            echo "[Worker $worker_id] Launching Database Task $task_id (Port: $db_port)..."
+            if [ -n "$DRY_RUN" ]; then
+                echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark database --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+            else
+                $UV run python -u -m marble.experiments.run_benchmark \
+                    --benchmark database \
+                    --manifest "$MANIFEST" \
+                    --split "$SPLIT" \
+                    --task-ids "$task_id" \
+                    --baseline "$BASELINE" \
+                    --seed 42 \
+                    --max-iterations 5 \
+                    --retrieval visible_k \
+                    --max-cards "$MAX_CARDS" \
+                    --lambda 0.15 \
+                    --beta 0.25 \
+                    --task-timeout 900 \
+                    $ENABLE_COMM_GOV \
+                    --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"
 
-            # Cleanup worker sandbox
-            docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true
+                # Cleanup worker sandbox
+                docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true
+            fi
             echo "[Worker $worker_id] Finished Database Task $task_id."
         ) &
         PIDS+=($!)
@@ -204,22 +208,26 @@ if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "research" ]; t
             [ -n "$q_key" ] && export MARBLE_QWEN_API_KEY="$q_key"
             [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
-            echo "[Worker $worker_id] Starting Research Task $task_id..."
-            $UV run python -u -m marble.experiments.run_benchmark \
-                --benchmark research \
-                --manifest "$MANIFEST" \
-                --split "$SPLIT" \
-                --task-ids "$task_id" \
-                --baseline "$BASELINE" \
-                --seed 42 \
-                --max-iterations 5 \
-                --retrieval visible_k \
-                --max-cards "$MAX_CARDS" \
-                --lambda 0.15 \
-                --beta 0.25 \
-                --task-timeout 900 \
-                $ENABLE_COMM_GOV \
-                --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"
+            echo "[Worker $worker_id] Launching Research Task $task_id..."
+            if [ -n "$DRY_RUN" ]; then
+                echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark research --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+            else
+                $UV run python -u -m marble.experiments.run_benchmark \
+                    --benchmark research \
+                    --manifest "$MANIFEST" \
+                    --split "$SPLIT" \
+                    --task-ids "$task_id" \
+                    --baseline "$BASELINE" \
+                    --seed 42 \
+                    --max-iterations 5 \
+                    --retrieval visible_k \
+                    --max-cards "$MAX_CARDS" \
+                    --lambda 0.15 \
+                    --beta 0.25 \
+                    --task-timeout 900 \
+                    $ENABLE_COMM_GOV \
+                    --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"
+            fi
             echo "[Worker $worker_id] Finished Research Task $task_id."
         ) &
         PIDS+=($!)
