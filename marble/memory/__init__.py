@@ -29,10 +29,8 @@ __all__ = [
 # Keep legacy memory classes available when the optional runtime dependencies
 # are installed. The governed core should remain importable on its own.
 try:
-    from .long_term_memory import LongTermMemory
     from .shared_memory import SharedMemory
-    from .short_term_memory import ShortTermMemory
 except ImportError:
     pass
 else:
-    __all__ += ["SharedMemory", "LongTermMemory", "ShortTermMemory"]
+    __all__ += ["SharedMemory"]

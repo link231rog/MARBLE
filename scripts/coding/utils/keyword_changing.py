@@ -10,8 +10,6 @@ def replace_model_name(
         "marble/engine/engine_planner.py",
         "marble/agent/coding_agent.py",
         "marble/agent/base_agent.py",
-        "marble/memory/long_term_memory.py",
-        "marble/memory/short_term_memory.py",
         "marble/environments/coding_utils/coder.py",
         "marble/environments/coding_utils/reviewer.py",
         "scripts/coding/run_demo.sh",

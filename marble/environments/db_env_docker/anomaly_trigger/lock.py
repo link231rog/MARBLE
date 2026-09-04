@@ -1,106 +1,13 @@
-import sys
-
-import psycopg2
-
-sys.path.append("/root/DB-GPT/")
 import datetime
 import random
 import time
-from multiprocessing.pool import Pool, ThreadPool
+from multiprocessing.pool import Pool
 
-import yaml
-
-
-class DBArgs(object):
-    def __init__(self, dbtype, config, dbname=None):
-        self.dbtype = dbtype
-        if self.dbtype == "mysql":
-            self.host = config["host"]
-            self.port = config["port"]
-            self.user = config["user"]
-            self.password = config["password"]
-            self.dbname = dbname if dbname else config["dbname"]
-            self.driver = "com.mysql.jdbc.Driver"
-            self.jdbc = "jdbc:mysql://"
-        else:
-            self.host = config["host"]
-            self.port = config["port"]
-            self.user = config["user"]
-            self.password = config["password"]
-            self.dbname = dbname if dbname else config["dbname"]
-            self.driver = "org.postgresql.Driver"
-            self.jdbc = "jdbc:postgresql://"
-
-
-class Database:
-    def __init__(self, args, timeout=-1):
-        self.args = args
-        self.conn = self.resetConn(timeout)
-
-        # self.schema = self.compute_table_schema()
-
-    def resetConn(self, timeout=-1):
-        conn = psycopg2.connect(
-            database=self.args.dbname,
-            user=self.args.user,
-            password=self.args.password,
-            host=self.args.host,
-            port=self.args.port,
-        )
-        return conn
-
-    def execute_sqls(self, sql):
-        self.conn = self.resetConn(timeout=-1)
-        cur = self.conn.cursor()
-        cur.execute(sql)
-        self.conn.commit()
-        cur.close()
-        self.conn.close()
-
-    def execute_sql_duration(self, duration, sql, max_id=0, commit_interval=500):
-        self.conn = self.resetConn(timeout=-1)
-        cursor = self.conn.cursor()
-        start = time.time()
-        cnt = 0
-        if duration > 0:
-            while (time.time() - start) < duration:
-                if max_id > 0:
-                    id = random.randint(1, max_id - 1)
-                    cursor.execute(sql + str(id) + ";")
-                else:
-                    cursor.execute(sql)
-                cnt += 1
-                if cnt % commit_interval == 0:
-                    self.conn.commit()
-        else:
-            print("error, the duration should be larger than 0")
-        self.conn.commit()
-        cursor.close()
-        self.conn.close()
-        return cnt
-
-    def concurrent_execute_sql(
-        self, threads, duration, sql, max_id=0, commit_interval=500
-    ):
-        pool = ThreadPool(threads)
-        results = [
-            pool.apply_async(
-                self.execute_sql_duration, (duration, sql, max_id, commit_interval)
-            )
-            for _ in range(threads)
-        ]
-        pool.close()
-        pool.join()
-        return results
+from utils.database import DB_CONFIG, Database, DBArgs
 
 
 def init():
-    # add the config
-    config_path = "/root/DB-GPT/config/tool_config.yaml"
-    with open(config_path, "r") as config_file:
-        config = yaml.safe_load(config_file)
-    db_args = DBArgs("pgsql", config)
-    return db_args
+    return DBArgs("postgresql", DB_CONFIG, application_name="anomaly")
 
 
 # create a table
@@ -155,17 +62,11 @@ def lock_contention(threads, duration, ncolumns, nrows, colsize, table_name="tab
 
 
 def lock(table_name, ncolumns, colsize, duration, nrows):
-    args = init()
+    db = Database(init())
     start = time.time()
     # lock_contention
     while time.time() - start < duration:
-        conn = psycopg2.connect(
-            database=args.dbname,
-            user=args.user,
-            password=args.password,
-            host=args.host,
-            port=args.port,
-        )
+        conn = db.resetConn()
         cur = conn.cursor()
         while time.time() - start < duration:
             col_name = random.randint(0, ncolumns - 1)

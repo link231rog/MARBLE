@@ -26,13 +26,16 @@ def distill_proposal_output(
         return "Empty observation", ""
 
     # Strip wrapper prefixes
-    clean = re.sub(r"^Result from the model:\s*", "", output).strip()
-    clean = re.sub(r"^Result from the function:\s*", "", clean).strip()
-    clean = re.sub(r"^As (?:an? )?[a-zA-Z0-9_]+,\s*", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(
+        r"^(?:Result from the (?:model|function)|As (?:an? )?[a-zA-Z0-9_]+):\s*",
+        "",
+        output,
+        flags=re.IGNORECASE,
+    ).strip()
 
-    # 1. Pure LLM Summary Key Generation
+    # 1. Pure LLM Summary Key Generation (skipped during tests/offline mode)
     model = worker_model or os.environ.get("MARBLE_WORKER_MODEL")
-    if model:
+    if model and not (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MARBLE_OFFLINE_DISTILL")):
         try:
             from marble.llms.model_prompting import model_prompting
 
