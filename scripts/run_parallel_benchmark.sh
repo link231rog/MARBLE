@@ -123,14 +123,22 @@ echo "  Database Tasks: ${DB_TASKS[*]}"
 echo "  Research Tasks: ${RESEARCH_TASKS[*]}"
 
 # ------------------------------------------------------------------------------
-# 1. Run Database Tasks (Sandboxed Docker per worker)
+# Execution Flow
+# If CONCURRENCY >= 16 and BENCHMARK_TARGET == "both", launch all Database AND Research tasks simultaneously!
+# Otherwise, run in phased batches.
 # ------------------------------------------------------------------------------
-if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
-    echo ">>> [Phase 1/2] Launching Database Benchmark across $CONCURRENCY parallel sandboxes..."
+if [ "$BENCHMARK_TARGET" == "both" ] && [ "$CONCURRENCY" -ge 16 ]; then
+    echo "======================================================================"
+    echo "🚀 [16-Concurrency Simultaneous Mode] Launching Database & Research in Parallel!"
+    echo "  Database Workers: 0..$(( ${#DB_TASKS[@]} - 1 ))"
+    echo "  Research Workers: ${#DB_TASKS[@]}..$(( ${#DB_TASKS[@]} + ${#RESEARCH_TASKS[@]} - 1 ))"
+    echo "======================================================================"
     PIDS=()
+
+    # Launch Database workers (0..7)
     for i in "${!DB_TASKS[@]}"; do
         task_id="${DB_TASKS[$i]}"
-        worker_id=$((i % CONCURRENCY))
+        worker_id=$i
         db_port=$((54320 + worker_id))
         prom_port=$((59090 + worker_id))
         node_port=$((59100 + worker_id))
@@ -149,7 +157,7 @@ if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "database" ]; t
             [ -n "$q_key" ] && export MARBLE_QWEN_API_KEY="$q_key"
             [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
-            echo "[Worker $worker_id] Launching Database Task $task_id (Port: $db_port)..."
+            echo "[DB Worker $worker_id] Launching Database Task $task_id (Port: $db_port)..."
             if [ -n "$DRY_RUN" ]; then
                 echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark database --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
             else
@@ -172,34 +180,15 @@ if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "database" ]; t
                 # Cleanup worker sandbox
                 docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true
             fi
-            echo "[Worker $worker_id] Finished Database Task $task_id."
+            echo "[DB Worker $worker_id] Finished Database Task $task_id."
         ) &
         PIDS+=($!)
-
-        # If batch reached concurrency limit, wait for batch before next slot
-        if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#DB_TASKS[@]} ]; then
-            echo "Waiting for current Database batch to complete..."
-            wait "${PIDS[@]}"
-            PIDS=()
-        fi
     done
 
-    # Wait for remaining database workers
-    if [ ${#PIDS[@]} -gt 0 ]; then
-        wait "${PIDS[@]}"
-    fi
-    echo ">>> Database Tasks successfully completed!"
-fi
-
-# ------------------------------------------------------------------------------
-# 2. Run Research Tasks (Pure in-memory, 8 workers concurrent)
-# ------------------------------------------------------------------------------
-if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
-    echo ">>> [Phase 2/2] Launching Research Benchmark across $CONCURRENCY parallel workers..."
-    PIDS=()
-    for i in "${!RESEARCH_TASKS[@]}"; do
-        task_id="${RESEARCH_TASKS[$i]}"
-        worker_id=$((i % CONCURRENCY))
+    # Launch Research workers (8..15)
+    for j in "${!RESEARCH_TASKS[@]}"; do
+        task_id="${RESEARCH_TASKS[$j]}"
+        worker_id=$(( ${#DB_TASKS[@]} + j ))
 
         q_key="$(get_qwen_key "$worker_id")"
         w_key="$(get_worker_key "$worker_id")"
@@ -208,7 +197,7 @@ if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "research" ]; t
             [ -n "$q_key" ] && export MARBLE_QWEN_API_KEY="$q_key"
             [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
 
-            echo "[Worker $worker_id] Launching Research Task $task_id..."
+            echo "[Research Worker $worker_id] Launching Research Task $task_id..."
             if [ -n "$DRY_RUN" ]; then
                 echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark research --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
             else
@@ -228,21 +217,138 @@ if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "research" ]; t
                     $ENABLE_COMM_GOV \
                     --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"
             fi
-            echo "[Worker $worker_id] Finished Research Task $task_id."
+            echo "[Research Worker $worker_id] Finished Research Task $task_id."
         ) &
         PIDS+=($!)
-
-        if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#RESEARCH_TASKS[@]} ]; then
-            echo "Waiting for current Research batch to complete..."
-            wait "${PIDS[@]}"
-            PIDS=()
-        fi
     done
 
-    if [ ${#PIDS[@]} -gt 0 ]; then
-        wait "${PIDS[@]}"
+    echo ">>> All ${#PIDS[@]} workers active in parallel! Waiting for full wave completion..."
+    wait "${PIDS[@]}"
+    echo ">>> All Database and Research Tasks successfully completed in parallel!"
+
+else
+    # ------------------------------------------------------------------------------
+    # 1. Run Database Tasks (Sandboxed Docker per worker)
+    # ------------------------------------------------------------------------------
+    if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
+        echo ">>> [Phase 1/2] Launching Database Benchmark across $CONCURRENCY parallel sandboxes..."
+        PIDS=()
+        for i in "${!DB_TASKS[@]}"; do
+            task_id="${DB_TASKS[$i]}"
+            worker_id=$((i % CONCURRENCY))
+            db_port=$((54320 + worker_id))
+            prom_port=$((59090 + worker_id))
+            node_port=$((59100 + worker_id))
+            pg_exp_port=$((59180 + worker_id))
+            compose_proj="marble_db_w${worker_id}"
+
+            q_key="$(get_qwen_key "$worker_id")"
+            w_key="$(get_worker_key "$worker_id")"
+
+            (
+                export MARBLE_DB_PORT="$db_port"
+                export MARBLE_PROM_PORT="$prom_port"
+                export MARBLE_NODE_PORT="$node_port"
+                export MARBLE_PG_EXPORTER_PORT="$pg_exp_port"
+                export MARBLE_COMPOSE_PROJECT="$compose_proj"
+                [ -n "$q_key" ] && export MARBLE_QWEN_API_KEY="$q_key"
+                [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
+
+                echo "[Worker $worker_id] Launching Database Task $task_id (Port: $db_port)..."
+                if [ -n "$DRY_RUN" ]; then
+                    echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark database --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+                else
+                    $UV run python -u -m marble.experiments.run_benchmark \
+                        --benchmark database \
+                        --manifest "$MANIFEST" \
+                        --split "$SPLIT" \
+                        --task-ids "$task_id" \
+                        --baseline "$BASELINE" \
+                        --seed 42 \
+                        --max-iterations 5 \
+                        --retrieval visible_k \
+                        --max-cards "$MAX_CARDS" \
+                        --lambda 0.15 \
+                        --beta 0.25 \
+                        --task-timeout 900 \
+                        $ENABLE_COMM_GOV \
+                        --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"
+
+                    # Cleanup worker sandbox
+                    docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true
+                fi
+                echo "[Worker $worker_id] Finished Database Task $task_id."
+            ) &
+            PIDS+=($!)
+
+            # If batch reached concurrency limit, wait for batch before next slot
+            if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#DB_TASKS[@]} ]; then
+                echo "Waiting for current Database batch to complete..."
+                wait "${PIDS[@]}"
+                PIDS=()
+            fi
+        done
+
+        # Wait for remaining database workers
+        if [ ${#PIDS[@]} -gt 0 ]; then
+            wait "${PIDS[@]}"
+        fi
+        echo ">>> Database Tasks successfully completed!"
     fi
-    echo ">>> Research Tasks successfully completed!"
+
+    # ------------------------------------------------------------------------------
+    # 2. Run Research Tasks (Pure in-memory)
+    # ------------------------------------------------------------------------------
+    if [ "$BENCHMARK_TARGET" == "both" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
+        echo ">>> [Phase 2/2] Launching Research Benchmark across $CONCURRENCY parallel workers..."
+        PIDS=()
+        for i in "${!RESEARCH_TASKS[@]}"; do
+            task_id="${RESEARCH_TASKS[$i]}"
+            worker_id=$((i % CONCURRENCY))
+
+            q_key="$(get_qwen_key "$worker_id")"
+            w_key="$(get_worker_key "$worker_id")"
+
+            (
+                [ -n "$q_key" ] && export MARBLE_QWEN_API_KEY="$q_key"
+                [ -n "$w_key" ] && export NVAPI_KEY="$w_key"
+
+                echo "[Worker $worker_id] Launching Research Task $task_id..."
+                if [ -n "$DRY_RUN" ]; then
+                    echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark research --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+                else
+                    $UV run python -u -m marble.experiments.run_benchmark \
+                        --benchmark research \
+                        --manifest "$MANIFEST" \
+                        --split "$SPLIT" \
+                        --task-ids "$task_id" \
+                        --baseline "$BASELINE" \
+                        --seed 42 \
+                        --max-iterations 5 \
+                        --retrieval visible_k \
+                        --max-cards "$MAX_CARDS" \
+                        --lambda 0.15 \
+                        --beta 0.25 \
+                        --task-timeout 900 \
+                        $ENABLE_COMM_GOV \
+                        --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"
+                fi
+                echo "[Worker $worker_id] Finished Research Task $task_id."
+            ) &
+            PIDS+=($!)
+
+            if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#RESEARCH_TASKS[@]} ]; then
+                echo "Waiting for current Research batch to complete..."
+                wait "${PIDS[@]}"
+                PIDS=()
+            fi
+        done
+
+        if [ ${#PIDS[@]} -gt 0 ]; then
+            wait "${PIDS[@]}"
+        fi
+        echo ">>> Research Tasks successfully completed!"
+    fi
 fi
 
 # ------------------------------------------------------------------------------
