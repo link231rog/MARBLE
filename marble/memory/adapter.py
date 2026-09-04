@@ -42,7 +42,7 @@ def distill_proposal_output(
             prompt = (
                 "Summarize the core diagnostic or research finding below into a single, concise "
                 f"title key (maximum {max_title_words} words). "
-                'Return ONLY a JSON object: {"summary_key": "<concise summary key>"}.\n'
+                'Return ONLY a JSON object: {"summary_key": "your concise title key here"}.\n'
                 f"Finding:\n{clean[:1200]}"
             )
             resp = model_prompting(
@@ -56,10 +56,18 @@ def distill_proposal_output(
             match = re.search(r'"summary_key"\s*:\s*"([^"]+)"', raw_text)
             if match:
                 title = match.group(1).strip()
-                words = title.split()
-                if len(words) > max_title_words:
-                    title = " ".join(words[:max_title_words])
-                return title, clean[:800]
+                # Reject prompt echoes / template placeholders
+                is_placeholder = (
+                    (title.startswith("<") and title.endswith(">"))
+                    or "concise summary key" in title.lower()
+                    or "title key here" in title.lower()
+                    or title.lower() in ("summary key", "summary_key", "title", "none", "null")
+                )
+                if not is_placeholder and len(title) >= 3:
+                    words = title.split()
+                    if len(words) > max_title_words:
+                        title = " ".join(words[:max_title_words])
+                    return title, clean[:800]
         except Exception:
             pass
 

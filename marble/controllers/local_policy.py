@@ -23,10 +23,7 @@ def features(proposal: MemoryProposal, current_state: Sequence[MemoryItem]) -> D
         "shared_signal": 1.0 if _SHARED_SIGNALS.search(proposal.title) else 0.0,
         "empty_value": 1.0 if not proposal.raw_value.strip() else 0.0,
         "value_words": min(len(proposal.raw_value.split()), 100) / 100.0,
-        "has_supersedes": float(
-            any(item.active and item.title.casefold() == proposal.title.casefold()
-                for item in current_state)
-        ),
+        "has_supersedes": float(_find_supersedes(proposal, current_state) is not None),
     }
 
 

@@ -15,11 +15,22 @@ _SHARED_SIGNALS = re.compile(
 )
 
 
+_NON_SUPERSEDABLE_TITLES = {
+    "", "empty observation", "<concise summary key>", "concise summary key",
+    "summary key", "we need to produce final answer", "we need to produce the next task",
+    "we need to produce the answer", "we need to produce 5q", "we need to produce a 5q research proposal",
+    "we have to produce final answer after considering all root causes",
+    "we need to respond as agent2", "we need to respond as agent3",
+}
+
+
 def _find_supersedes(
     proposal: MemoryProposal,
     current_state: Sequence[MemoryItem],
 ) -> Optional[str]:
     normalized = proposal.title.strip().casefold()
+    if not normalized or normalized in _NON_SUPERSEDABLE_TITLES or (normalized.startswith("<") and normalized.endswith(">")):
+        return None
     for item in current_state:
         if (
             item.active

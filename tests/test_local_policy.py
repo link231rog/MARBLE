@@ -54,3 +54,18 @@ def test_local_policy_decide_supersedes():
     assert decision.exists is True
     assert decision.visibility == "global"
     assert decision.supersedes == "m1"
+
+
+def test_non_supersedable_titles_do_not_supersede():
+    from marble.memory.schema import MemoryItem
+    c = LocalPolicyController()
+    c.weights["global"]["bias"] = 1.0
+    item = MemoryItem(
+        memory_id="m1", proposal_id="p1", task_id="t", title="<concise summary key>",
+        raw_value="old", visibility="global", owner_id=None, source_agent="a",
+        source="worker", step_index=0, active=True, supersedes=None, created_at=1,
+    )
+    prop = _prop(title="<concise summary key>", value="new")
+    decision = c.decide(prop, [item])
+    assert decision.exists is True
+    assert decision.supersedes is None  # Must NOT supersede placeholder!
