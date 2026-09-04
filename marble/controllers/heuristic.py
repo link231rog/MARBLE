@@ -24,6 +24,7 @@ def _find_supersedes(
         if (
             item.active
             and item.task_id == proposal.task_id
+            and (item.visibility == "global" or item.owner_id == proposal.agent_id)
             and item.title.strip().casefold() == normalized
         ):
             return item.memory_id

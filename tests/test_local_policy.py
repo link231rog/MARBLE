@@ -38,3 +38,19 @@ def test_save_load_roundtrip(tmp_path):
     assert loaded.weights == c.weights
     with open(path) as fh:
         assert set(json.load(fh).keys()) == {"absent", "private", "global"}
+
+
+def test_local_policy_decide_supersedes():
+    from marble.memory.schema import MemoryItem
+    c = LocalPolicyController()
+    c.weights["global"]["bias"] = 1.0
+    item = MemoryItem(
+        memory_id="m1", proposal_id="p1", task_id="t", title="shared result",
+        raw_value="old", visibility="global", owner_id=None, source_agent="a",
+        source="worker", step_index=0, active=True, supersedes=None, created_at=1,
+    )
+    prop = _prop(title="shared result", value="new")
+    decision = c.decide(prop, [item])
+    assert decision.exists is True
+    assert decision.visibility == "global"
+    assert decision.supersedes == "m1"

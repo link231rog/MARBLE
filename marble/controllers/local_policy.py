@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any, Dict, List, Sequence
 
+from marble.controllers.heuristic import _find_supersedes
 from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
 
 VISIBILITIES = ("absent", "private", "global")
@@ -46,10 +47,12 @@ class LocalPolicyController:
         feat = features(proposal, current_state)
         vis = max(VISIBILITIES, key=lambda v: self.scores(feat)[v])
         exists = vis != "absent"
+        supersedes = _find_supersedes(proposal, current_state) if exists else None
         return MemoryTargetState(
             exists=exists,
             visibility=vis if exists else "absent",
             owner_id=proposal.agent_id if vis == "private" else None,
+            supersedes=supersedes,
         )
 
     def update(self, feat: Dict[str, float], label: str, lr: float = 0.1) -> None:
