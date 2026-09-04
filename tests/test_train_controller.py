@@ -42,6 +42,26 @@ def test_load_samples_filters_and_parses(tmp_path):
     assert samples[0]["label"] == "global"
 
 
+def test_load_samples_preserves_absent_without_memory_id(tmp_path):
+    trace_file = str(tmp_path / "absent_trace.jsonl")
+    with open(trace_file, "w") as fh:
+        # Realistic absent event as emitted by GovernedMemory.submit when memory_id is None
+        absent_ev = {
+            "event": "memory_decision",
+            "memory_id": None,
+            "proposal": {
+                "proposal_id": "p1", "task_id": "t", "agent_id": "a",
+                "source": "worker", "title": "scratch note", "raw_value": "x",
+                "step_index": 1,
+            },
+            "target": {"exists": False, "visibility": "absent", "owner_id": None, "supersedes": None},
+        }
+        fh.write(json.dumps(absent_ev) + "\n")
+    samples = load_samples([trace_file])
+    assert len(samples) == 1
+    assert samples[0]["label"] == "absent"
+
+
 def test_train_improves_accuracy_on_separable_data(tmp_path):
     rows = []
     for i in range(10):

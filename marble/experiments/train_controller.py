@@ -114,7 +114,11 @@ def load_samples(trace_paths: List[str]) -> List[Dict[str, Any]]:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
                 ev = json.loads(line)
-                if ev.get("event") != "memory_decision" or not ev.get("memory_id"):
+                if ev.get("event") != "memory_decision" or not ev.get("proposal"):
+                    continue
+                target = ev.get("target") or {}
+                vis = target.get("visibility")
+                if vis not in VISIBILITIES:
                     continue
                 p = ev["proposal"]
                 proposal = MemoryProposal(
@@ -126,7 +130,7 @@ def load_samples(trace_paths: List[str]) -> List[Dict[str, Any]]:
                 # ponytail: supersedes context not replayed here; add when traces store state snapshots
                 samples.append({
                     "feat": features(proposal, []),
-                    "label": ev["target"]["visibility"],
+                    "label": vis,
                 })
     return samples
 
