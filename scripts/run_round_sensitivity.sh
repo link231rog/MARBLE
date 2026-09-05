@@ -37,7 +37,18 @@ echo "======================================================================"
 
 cleanup_docker
 
-SWEEP_ROUNDS=(2 4 6 8 10)
+is_run_completed() {
+    local dir="$1"
+    if [ -d "$dir" ]; then
+        local count=$(find "$dir" -name "summary.json" 2>/dev/null | grep -v "evaluation_summary.json" | wc -l)
+        if [ "$count" -ge 8 ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+SWEEP_ROUNDS=(2 4 6 8 10 12 14)
 
 for T in "${SWEEP_ROUNDS[@]}"; do
     echo ""
@@ -51,31 +62,44 @@ for T in "${SWEEP_ROUNDS[@]}"; do
     mkdir -p "$OUT_DIR_OURS" "$OUT_DIR_GLOBAL"
 
     # 1. Run MARBLE (ours_rl with Private/Global Governance)
-    echo ">>> Running MARBLE (ours_rl) at T = $T..."
-    ./scripts/run_parallel_benchmark.sh \
-        --baseline ours_rl \
-        --manifest "$MANIFEST" \
-        --split "$SPLIT" \
-        --concurrency "$CONCURRENCY" \
-        --max-iterations "$T" \
-        --controller-checkpoint "$CKPT" \
-        --out "$OUT_DIR_OURS"
-
-    cleanup_docker
-    sleep 3
+    if is_run_completed "$OUT_DIR_OURS"; then
+        echo ">>> [T=$T] MARBLE (ours_rl) already completed (8/8 tasks). Skipping..."
+    else
+        echo ">>> Running MARBLE (ours_rl) at T = $T..."
+        ./scripts/run_parallel_benchmark.sh \
+            --baseline ours_rl \
+            --manifest "$MANIFEST" \
+            --split "$SPLIT" \
+            --concurrency "$CONCURRENCY" \
+            --max-iterations "$T" \
+            --controller-checkpoint "$CKPT" \
+            --out "$OUT_DIR_OURS"
+        cleanup_docker
+        sleep 3
+    fi
 
     # 2. Run GlobalAddAll (Unconstrained Global Broadcast Baseline)
-    echo ">>> Running GlobalAddAll (no privacy baseline) at T = $T..."
-    ./scripts/run_parallel_benchmark.sh \
-        --baseline global_add_all \
+    if is_run_completed "$OUT_DIR_GLOBAL"; then
+        echo ">>> [T=$T] GlobalAddAll already completed (8/8 tasks). Skipping..."
+    else
+        echo ">>> Running GlobalAddAll (no privacy baseline) at T = $T..."
+        ./scripts/run_parallel_benchmark.sh \
+            --baseline global_add_all \
+            --manifest "$MANIFEST" \
+            --split "$SPLIT" \
+            --concurrency "$CONCURRENCY" \
+            --max-iterations "$T" \
+            --out "$OUT_DIR_GLOBAL"
+        cleanup_docker
+        sleep 3
+    fi
+
+    echo "📊 Updating sensitivity analysis table after T=$T..."
+    $UV run python -m marble.experiments.evaluate_round_sensitivity \
+        --pattern "runs/sensitivity_rounds_T*" \
         --manifest "$MANIFEST" \
         --split "$SPLIT" \
-        --concurrency "$CONCURRENCY" \
-        --max-iterations "$T" \
-        --out "$OUT_DIR_GLOBAL"
-
-    cleanup_docker
-    sleep 3
+        --out "runs/round_sensitivity_analysis_table.json" || true
 done
 
 echo ""
