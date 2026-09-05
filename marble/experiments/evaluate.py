@@ -148,8 +148,38 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     ]
     exposures = [e for e in events if e.get("event") == "memory_exposure"]
     cross = sum(1 for e in reads if owners.get(e["memory_id"]) != e.get("reader_id"))
-    read_ids = {e["memory_id"] for e in reads if e.get("memory_id")}
-    reused = sum(1 for mid in read_ids if mid in owners)
+
+    # Reads per memory_id
+    read_counts: Dict[str, int] = {}
+    cross_read_counts: Dict[str, int] = {}
+    for e in reads:
+        mid = e.get("memory_id")
+        if mid:
+            read_counts[mid] = read_counts.get(mid, 0) + 1
+            if owners.get(mid) != e.get("reader_id"):
+                cross_read_counts[mid] = cross_read_counts.get(mid, 0) + 1
+
+    # R16: read coverage (>=1 read) vs repeated reuse (>=2 reads)
+    read_coverage = (len([mid for mid in read_counts if mid in owners]) / total) if total else 0.0
+    cross_agent_read_coverage = (len([mid for mid in cross_read_counts if mid in owners]) / total) if total else 0.0
+    repeated_reuse_rate = (len([mid for mid, c in read_counts.items() if c >= 2 and mid in owners]) / total) if total else 0.0
+
+    # R17: Separate decisions, valid absent, format errors
+    total_decisions = len(decisions)
+    valid_absent = sum(
+        1 for e in decisions
+        if not e.get("memory_id")
+        and e.get("parse_status", "valid_json") == "valid_json"
+        and e.get("target", {}).get("visibility") == "absent"
+    )
+    format_errors = sum(
+        1 for e in decisions
+        if e.get("parse_status") in ("format_error", "schema_error")
+    )
+    stored_rate = (total / total_decisions) if total_decisions else 0.0
+    valid_absent_rate = (valid_absent / total_decisions) if total_decisions else 0.0
+    format_error_rate = (format_errors / total_decisions) if total_decisions else 0.0
+
     active_global = [
         item for item in active_items.values() if item["visibility"] == "global"
     ]
@@ -158,10 +188,15 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     ]
     return {
         "decisions_total": total,
-        "accept_rate": (total / len(decisions)) if decisions else 0.0,
+        "proposals_total": total_decisions,
+        "proposals_stored": total,
+        "accept_rate": stored_rate,
         "reject_rate": (
-            sum(1 for e in decisions if not e.get("memory_id")) / len(decisions)
-        ) if decisions else 0.0,
+            sum(1 for e in decisions if not e.get("memory_id")) / total_decisions
+        ) if total_decisions else 0.0,
+        "stored_rate": stored_rate,
+        "valid_absent_rate": valid_absent_rate,
+        "format_error_rate": format_error_rate,
         "private": by_vis.get("private", 0),
         "global": by_vis.get("global", 0),
         "supersessions": len(superseded_ids),
@@ -177,7 +212,10 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         ),
         "reads": len(reads),
         "cross_agent_reads": cross,
-        "reuse_rate": (reused / total) if total else 0.0,
+        "reuse_rate": read_coverage,
+        "read_coverage": read_coverage,
+        "cross_agent_read_coverage": cross_agent_read_coverage,
+        "repeated_reuse_rate": repeated_reuse_rate,
         "active_memory_count": len(active_items),
         "active_global_count": len(active_global),
         "active_private_count": len(active_private),
@@ -277,7 +315,7 @@ def evaluate_run_root(
         }
     root = os.fspath(run_root)
     rows: List[Dict[str, Any]] = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         if "summary.json" in filenames:
             row = evaluate_task_dir(dirpath)
             if allowed is not None and (
@@ -327,6 +365,50 @@ def aggregate_by_method(
             agg[k + "_se"] = round(se, 6)
         report[method] = agg
     return report
+
+
+def compute_paired_memory_dependency(
+    rows: List[Dict[str, Any]],
+    memory_method: str = "global_add_all",
+    baseline_method: str = "no_memory",
+) -> Dict[str, Any]:
+    """Task-level paired difference analysis to identify memory dependency without circular reasoning (spec §12.4 R15)."""
+    by_task: Dict[Tuple[str, int], Dict[str, float]] = {}
+    for r in rows:
+        bench = str(r.get("benchmark", ""))
+        tid = int(r.get("task_id", 0))
+        method = str(r.get("method", ""))
+        score = float(r.get("task_score", 0.0))
+        by_task.setdefault((bench, tid), {})[method] = score
+
+    paired: List[Dict[str, Any]] = []
+    memory_sensitive_tasks = []
+    memory_insensitive_tasks = []
+
+    for (bench, tid), scores in sorted(by_task.items()):
+        if memory_method in scores and baseline_method in scores:
+            delta = scores[memory_method] - scores[baseline_method]
+            entry = {
+                "benchmark": bench,
+                "task_id": tid,
+                "score_memory": scores[memory_method],
+                "score_no_memory": scores[baseline_method],
+                "delta": round(delta, 4),
+            }
+            paired.append(entry)
+            if delta > 0:
+                memory_sensitive_tasks.append(f"{bench}:{tid}")
+            else:
+                memory_insensitive_tasks.append(f"{bench}:{tid}")
+
+    return {
+        "paired_tasks_count": len(paired),
+        "memory_sensitive_count": len(memory_sensitive_tasks),
+        "memory_insensitive_count": len(memory_insensitive_tasks),
+        "memory_sensitive_tasks": memory_sensitive_tasks,
+        "memory_insensitive_tasks": memory_insensitive_tasks,
+        "paired_details": paired,
+    }
 
 
 def main(argv: List[str] | None = None) -> None:

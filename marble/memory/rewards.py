@@ -62,34 +62,41 @@ def proposal_rewards(
     outcome_gated: bool = True,
     pass_at_1: float | None = None,
     target_card_budget: int = 12,
-    gamma_density: float = 0.02,
+    gamma_density: float = 0.0,
+    task_success: bool | None = None,
 ) -> Dict[str, float]:
-    """G_i per stored proposal from one episode's trace events (doc §Reward, Chapter 3).
+    """G_i per proposal from one episode's trace events (doc §Reward, Chapter 3).
 
     A_e = task_score - same_task_baseline (same-task relative advantage).
     With outcome_gated=True (2025 RLVR standard), non-owner collaboration bonus (1+beta)
-    is only awarded if the task succeeds (pass_at_1 >= 1.0 or task_score >= 1.0) and advantage > 0.
-    SimPO-style density penalty gamma_density * (active_cards - budget)/budget is subtracted
-    when active global memory cards exceed target_card_budget.
+    is only awarded if the task succeeds and advantage > 0.
+    For absent decisions, memory cost is 0.0 and credit equals the episode advantage.
+    Credits are keyed by both proposal_id and memory_id for seamless joins.
     """
     b = BETA if beta is None else beta
     lam = LAMBDA if lambda_ is None else lambda_
-    stored: Dict[str, Dict[str, Any]] = {}
+    proposals_data: List[Dict[str, Any]] = []
     global_cards_count = 0
     for ev in events:
         if ev.get("event") != "memory_decision":
             continue
         mid = ev.get("memory_id")
-        if not mid:
-            continue
         target = ev.get("target") or {}
-        if target.get("visibility") == "global":
+        vis = target.get("visibility")
+        if vis == "global" and mid:
             global_cards_count += 1
-        proposal = ev["proposal"]
-        stored[mid] = {
-            "owner": proposal["agent_id"],
-            "tokens": float(ev.get("memory_cost_tokens", token_count(proposal.get("raw_value", "")))),
-        }
+        proposal = ev.get("proposal") or {}
+        pid = proposal.get("proposal_id")
+        tokens = float(ev.get("memory_cost_tokens", token_count(proposal.get("raw_value", ""))))
+        proposals_data.append({
+            "pid": pid,
+            "mid": mid,
+            "owner": proposal.get("agent_id"),
+            "tokens": tokens,
+            "visibility": vis,
+            "parse_status": ev.get("parse_status", "valid_json"),
+        })
+
     readers: Dict[str, List[str]] = {}
     for ev in events:
         if ev.get("event") == "memory_read":
@@ -97,28 +104,43 @@ def proposal_rewards(
 
     advantage = task_score - same_task_baseline
 
-    # SimPO-style memory density / capacity regularization (Chapter 3 §3.2)
+    # SimPO-style memory density penalty (only active when gamma_density > 0)
     density_penalty = 0.0
-    if global_cards_count > target_card_budget and target_card_budget > 0:
+    if global_cards_count > target_card_budget and target_card_budget > 0 and gamma_density > 0:
         density_penalty = gamma_density * (global_cards_count - target_card_budget) / target_card_budget
 
     # RLVR Outcome Gating: only successful episodes get collaboration multiplier (Chapter 3 §2.2)
-    is_success = (pass_at_1 >= 1.0) if (pass_at_1 is not None) else (task_score >= 1.0)
+    if task_success is not None:
+        is_success = bool(task_success)
+    elif pass_at_1 is not None:
+        is_success = (pass_at_1 >= 1.0)
+    else:
+        is_success = (task_score >= 1.0)
 
     credits: Dict[str, float] = {}
-    for mid, info in stored.items():
-        cost = info["tokens"] / _TOKEN_BUDGET
-        was_read = mid in readers
-        if not was_read:
-            credits[mid] = -lam * cost - density_penalty
-            continue
-        non_owner = any(r != info["owner"] for r in readers[mid])
-        if outcome_gated and (not is_success or advantage <= 0):
-            mult = 1.0
+    for p_info in proposals_data:
+        pid = p_info["pid"]
+        mid = p_info["mid"]
+        vis = p_info["visibility"]
+        if vis == "absent" or not mid:
+            credit_val = advantage
         else:
-            mult = 1.0 + b * (1 if non_owner else 0)
-        # A memory receives at most one reuse credit; repeated reads only affect
-        # the diagnostic trace, never the training signal.
-        credits[mid] = advantage * mult - lam * cost - density_penalty
+            cost = p_info["tokens"] / _TOKEN_BUDGET
+            was_read = mid in readers
+            if not was_read:
+                credit_val = -lam * cost - density_penalty
+            else:
+                non_owner = any(r != p_info["owner"] for r in readers[mid])
+                if outcome_gated and (not is_success or advantage <= 0):
+                    mult = 1.0
+                else:
+                    mult = 1.0 + b * (1 if non_owner else 0)
+                credit_val = advantage * mult - lam * cost - density_penalty
+
+        if pid:
+            credits[pid] = credit_val
+        if mid:
+            credits[mid] = credit_val
+
     return credits
 

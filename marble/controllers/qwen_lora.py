@@ -193,6 +193,31 @@ def export_sft_pairs(
     return pairs
 
 
+def audit_sft_distribution(pairs: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
+    """Audit distribution of SFT action labels without artificial quota forcing (spec §12.1 rule 8, §12.3 R11)."""
+    counts = {"absent": 0, "private": 0, "global": 0, "invalid": 0}
+    for _, completion in pairs:
+        try:
+            parsed = json.loads(completion)
+            vis = parsed.get("visibility")
+            if vis in counts:
+                counts[vis] += 1
+            else:
+                counts["invalid"] += 1
+        except Exception:
+            counts["invalid"] += 1
+    total = len(pairs)
+    proportions = {
+        k: round(v / total, 4) if total > 0 else 0.0
+        for k, v in counts.items()
+    }
+    return {
+        "total_pairs": total,
+        "counts": counts,
+        "proportions": proportions,
+    }
+
+
 def completion_only_example(
     tokenizer: Any,
     prompt: str,
@@ -359,8 +384,14 @@ def load_qwen_rl_samples(
             if event.get("event") != "memory_decision":
                 continue
             stats["decisions"] += 1
+            if event.get("parse_status") in ("format_error", "schema_error"):
+                stats["skipped_format_error"] = stats.get("skipped_format_error", 0) + 1
+                continue
+            pid = event.get("proposal", {}).get("proposal_id")
             memory_id = event.get("memory_id")
-            credit = credits.get(memory_id)
+            credit = credits.get(pid) if pid else None
+            if credit is None and memory_id:
+                credit = credits.get(memory_id)
             if credit is None:
                 stats["skipped_no_credit"] += 1
                 continue

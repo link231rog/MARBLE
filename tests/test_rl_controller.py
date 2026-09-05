@@ -82,3 +82,64 @@ def test_train_rl_warmstart_and_anchor(tmp_path):
     loaded = LocalPolicyController.load(str(out_path))
     assert loaded.weights["global"]["shared_signal"] > 2.0
 
+
+def test_rl_trainer_updates_absent_and_skips_format_error():
+    ctrl = LocalPolicyController()
+    ctrl.weights["global"]["bias"] = 1.0  # initial preference for global
+    trainer = RLTrainer(ctrl, lr=0.1)
+    events = [
+        # Legitimate absent decision with positive credit (e.g. noise filtered during success)
+        {
+            "event": "memory_decision",
+            "memory_id": None,
+            "target": {"visibility": "absent"},
+            "proposal": {"proposal_id": "p_absent", "title": "ignore", "raw_value": "noise"},
+            "parse_status": "valid_json",
+        },
+        # Format error decision (must be skipped)
+        {
+            "event": "memory_decision",
+            "memory_id": None,
+            "target": {"visibility": "absent"},
+            "proposal": {"proposal_id": "p_err", "title": "bad json", "raw_value": "bad"},
+            "parse_status": "format_error",
+        },
+    ]
+    credits = {"p_absent": 1.0, "p_err": 1.0}
+    updates = trainer.update_trace(events, credits)
+    assert updates == 1
+    # Check that absent weights were reinforced
+    assert ctrl.weights["absent"]["bias"] > 0.0
+
+
+def test_rl_trainer_restores_active_state_for_features():
+    ctrl = LocalPolicyController()
+    trainer = RLTrainer(ctrl, lr=0.1)
+    # Event with an active memory that matches the proposal title -> supersedes should be 1.0
+    active_card = {
+        "memory_id": "m_prior",
+        "proposal_id": "p0",
+        "task_id": "task_1",
+        "title": "same plan",
+        "raw_value": "old",
+        "visibility": "global",
+        "owner_id": None,
+        "source_agent": "a1",
+        "source": "worker",
+        "step_index": 0,
+        "active": True,
+        "supersedes": None,
+        "created_at": 100,
+    }
+    event = {
+        "event": "memory_decision",
+        "memory_id": "m1",
+        "target": {"visibility": "global"},
+        "proposal": {"proposal_id": "p1", "task_id": "task_1", "agent_id": "a1", "title": "same plan", "raw_value": "new"},
+        "active_memory_index": [active_card],
+    }
+    assert trainer.update_event(event, credit=1.0) is True
+    # has_supersedes weight for global should have increased from 0.0
+    assert ctrl.weights["global"]["has_supersedes"] > 0.0
+
+

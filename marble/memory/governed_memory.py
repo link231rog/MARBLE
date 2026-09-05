@@ -50,10 +50,17 @@ class GovernedMemory:
         target = self.controller.decide(proposal, current_state)
         prompt = getattr(self.controller, "last_prompt", None)
         raw = getattr(self.controller, "last_raw", None)
+        parse_status = getattr(self.controller, "last_parse_status", None)
         if prompt is not None:
             metadata["controller_prompt"] = prompt
         if raw is not None:
             metadata["controller_output"] = raw
+        if parse_status is not None:
+            metadata["parse_status"] = parse_status
+        elif raw is not None or prompt is not None:
+            metadata["parse_status"] = "valid_json"
+        else:
+            metadata["parse_status"] = "not_applicable"
         item = self.bank.apply(proposal, target)
         self.trace.log_decision(proposal, target,
                                 memory_id=item.memory_id if item else None,
@@ -65,7 +72,7 @@ class GovernedMemory:
         reader_id: str,
         task_id: str,
         query: Optional[str] = None,
-        top_k: int = 6,
+        top_k: int = 5,
     ) -> List[MemoryCard]:
         cards = self.bank.visible_keys(reader_id, task_id)
         return self.retriever.rank(cards, query=query, top_k=top_k)

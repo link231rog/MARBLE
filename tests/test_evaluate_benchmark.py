@@ -231,3 +231,72 @@ def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert sorted(out) == ["heuristic", "no_memory"]
     assert out["heuristic"]["memory.decisions_total"] == 0.0
+
+
+def test_read_coverage_and_repeated_reuse_disambiguation():
+    # R16: distinguish read_coverage (>=1 read) from repeated_reuse_rate (>=2 reads)
+    events = [
+        _decision("m1", "a1", "global"),
+        _decision("m2", "a1", "global"),
+        # m1 is read 3 times, m2 is read 0 times
+        _read("m1", "a2"),
+        _read("m1", "a3"),
+        _read("m1", "a1"),
+    ]
+    m = evaluate_memory_trace(events)
+    # Total stored = 2
+    # m1 read >=1 times -> 1/2 = 0.5 read_coverage
+    assert m["read_coverage"] == 0.5
+    assert m["reuse_rate"] == 0.5  # legacy alias
+    # m1 read >=2 times -> 1/2 = 0.5 repeated_reuse_rate
+    assert m["repeated_reuse_rate"] == 0.5
+    # Cross-agent coverage: m1 read by a2 and a3 -> 1/2 = 0.5
+    assert m["cross_agent_read_coverage"] == 0.5
+
+
+def test_stored_and_format_error_rates():
+    # R17: Separate stored rate, valid absent rate, and format error rate
+    events = [
+        # 1. Stored
+        _decision("m1", "a1", "global"),
+        # 2. Valid absent
+        {
+            "event": "memory_decision",
+            "memory_id": None,
+            "target": {"visibility": "absent"},
+            "proposal": {"proposal_id": "p2", "agent_id": "a1", "raw_value": "noise"},
+            "parse_status": "valid_json",
+        },
+        # 3. Format error
+        {
+            "event": "memory_decision",
+            "memory_id": None,
+            "target": {"visibility": "absent"},
+            "proposal": {"proposal_id": "p3", "agent_id": "a1", "raw_value": "broken"},
+            "parse_status": "format_error",
+        },
+    ]
+    m = evaluate_memory_trace(events)
+    assert m["proposals_total"] == 3
+    assert abs(m["stored_rate"] - 1 / 3) < 1e-9
+    assert abs(m["valid_absent_rate"] - 1 / 3) < 1e-9
+    assert abs(m["format_error_rate"] - 1 / 3) < 1e-9
+
+
+def test_compute_paired_memory_dependency():
+    # R15: Paired difference analysis without circular reasoning
+    from marble.experiments.evaluate import compute_paired_memory_dependency
+
+    rows = [
+        {"benchmark": "db", "task_id": 1, "method": "global_add_all", "task_score": 1.0},
+        {"benchmark": "db", "task_id": 1, "method": "no_memory", "task_score": 0.2},  # Sensitive: delta +0.8
+        {"benchmark": "db", "task_id": 2, "method": "global_add_all", "task_score": 0.5},
+        {"benchmark": "db", "task_id": 2, "method": "no_memory", "task_score": 0.5},  # Insensitive: delta 0.0
+    ]
+    res = compute_paired_memory_dependency(rows)
+    assert res["paired_tasks_count"] == 2
+    assert res["memory_sensitive_count"] == 1
+    assert res["memory_insensitive_count"] == 1
+    assert res["memory_sensitive_tasks"] == ["db:1"]
+    assert res["memory_insensitive_tasks"] == ["db:2"]
+

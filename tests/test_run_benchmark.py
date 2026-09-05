@@ -705,6 +705,8 @@ def test_summary_resume_config_mismatch_reruns(tmp_path, monkeypatch):
 def test_default_max_cards_is_five_across_entrypoints():
     from marble.experiments.engine_bridge import MemoryStep
     from marble.experiments.run_benchmark import _build_arg_parser
+    from marble.memory.governed_memory import GovernedMemory
+    import inspect
 
     # 1. Engine bridge MemoryStep default
     step = MemoryStep(None)
@@ -714,5 +716,26 @@ def test_default_max_cards_is_five_across_entrypoints():
     parser = _build_arg_parser()
     args = parser.parse_args(["--benchmark", "database"])
     assert args.max_cards == 5, f"CLI --max-cards default must be 5, got {args.max_cards}"
+
+    # 3. GovernedMemory.visible_keys signature default
+    sig = inspect.signature(GovernedMemory.visible_keys)
+    assert sig.parameters["top_k"].default == 5, f"GovernedMemory top_k default must be 5, got {sig.parameters['top_k'].default}"
+
+
+def test_describe_controller_truthful_identity():
+    from marble.experiments.run_benchmark import describe_controller
+
+    # R07: .json checkpoint must be identified as local_policy linear even if baseline is ours_rl
+    desc_json = describe_controller("ours_rl", controller_checkpoint="runs/ours_rl_policy.json")
+    assert desc_json == "local_policy(linear;ours_rl_policy.json)"
+
+    # LoRA checkpoint directory must be identified as qwen_rl with adapter
+    desc_lora = describe_controller("ours_rl", controller_checkpoint="runs/qwen_adapter")
+    assert "qwen_rl" in desc_lora and "adapter=qwen_adapter" in desc_lora
+
+    # Standard baselines return their canonical name
+    assert describe_controller("heuristic") == "heuristic"
+    assert describe_controller("global_add_all") == "global_add_all"
+
 
 

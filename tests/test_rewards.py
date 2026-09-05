@@ -106,3 +106,27 @@ def test_proposal_rewards_simpo_density_penalty():
     expected = -0.05 * cost - 0.04
     assert abs(credits["m0"] - expected) < 1e-9
 
+
+def test_proposal_rewards_includes_absent_decisions():
+    # R08: Absent proposals receive credit = advantage (cost 0.0) and are keyed by proposal_id
+    events = [
+        {
+            "event": "memory_decision",
+            "memory_id": None,
+            "target": {"visibility": "absent"},
+            "proposal": {"proposal_id": "prop_absent_1", "agent_id": "a1", "raw_value": "noise"},
+        },
+        {
+            "event": "memory_decision",
+            "memory_id": "m1",
+            "target": {"visibility": "private"},
+            "proposal": {"proposal_id": "prop_stored_1", "agent_id": "a1", "raw_value": "useful"},
+        },
+    ]
+    credits = proposal_rewards(events, task_score=0.9, same_task_baseline=0.4)
+    # Advantage = 0.5
+    assert credits["prop_absent_1"] == 0.5
+    assert "prop_stored_1" in credits
+    assert "m1" in credits
+
+

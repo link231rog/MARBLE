@@ -47,6 +47,7 @@ class JsonController:
         self.rejections: List[Dict[str, Any]] = []
         self.last_prompt = ""
         self.last_raw = ""
+        self.last_parse_status = ""
 
     def set_context(
         self,
@@ -117,10 +118,16 @@ class JsonController:
         self.last_raw = raw
         error = self._validate(raw, current_state, proposal)
         if error is not None:
+            self.last_parse_status = (
+                "format_error"
+                if ("not valid JSON" in error or "not a JSON object" in error)
+                else "schema_error"
+            )
             self.rejections.append(
                 {"proposal_id": proposal.proposal_id, "raw": raw, "reason": error}
             )
             return MemoryTargetState(exists=False, visibility="absent")
+        self.last_parse_status = "valid_json"
         parsed = json.loads(raw)
         visibility = parsed["visibility"]
         if visibility == "absent":

@@ -404,3 +404,23 @@ def test_completion_only_collator_and_weighted_loss():
         logits[:1], batch["labels"][:1], torch.tensor([1.0])
     )
     assert torch.isclose(weighted, first_only)
+
+
+def test_audit_sft_distribution():
+    from marble.controllers.qwen_lora import audit_sft_distribution
+
+    pairs = [
+        ("prompt1", '{"visibility": "global", "supersedes": null}'),
+        ("prompt2", '{"visibility": "private", "supersedes": null}'),
+        ("prompt3", '{"visibility": "absent", "supersedes": null}'),
+        ("prompt4", '{"visibility": "global", "supersedes": "m1"}'),
+        ("prompt5", 'invalid json'),
+    ]
+    report = audit_sft_distribution(pairs)
+    assert report["total_pairs"] == 5
+    assert report["counts"]["global"] == 2
+    assert report["counts"]["private"] == 1
+    assert report["counts"]["absent"] == 1
+    assert report["counts"]["invalid"] == 1
+    assert report["proportions"]["global"] == 0.4
+

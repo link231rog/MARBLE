@@ -233,6 +233,33 @@ def make_controller(
     return controller
 
 
+def describe_controller(
+    baseline: str,
+    controller_checkpoint: Optional[str] = None,
+    qwen_base_model: Optional[str] = None,
+    qwen_api_model: Optional[str] = None,
+) -> str:
+    """Accurately identify controller type and backend without mislabeling (spec §12.3 R07)."""
+    canonical = canonical_baseline(baseline)
+    spec = baseline_spec(canonical)
+    if spec.controller in ("local_policy",):
+        ckpt_name = Path(controller_checkpoint).name if controller_checkpoint else "untrained"
+        return f"local_policy(linear;{ckpt_name})"
+    if spec.controller in ("qwen_sft", "qwen_rl"):
+        if controller_checkpoint and str(controller_checkpoint).endswith(".json"):
+            return f"local_policy(linear;{Path(controller_checkpoint).name})"
+        model_name = (
+            qwen_api_model
+            or qwen_base_model
+            or os.environ.get("MARBLE_QWEN_BASE_MODEL")
+            or "Qwen/Qwen3-4B-Instruct-2507"
+        )
+        adapter = Path(controller_checkpoint).name if controller_checkpoint else "none"
+        prefix = "qwen_rl" if spec.controller == "qwen_rl" else "qwen_sft"
+        return f"{prefix}(model={model_name};adapter={adapter})"
+    return canonical
+
+
 def make_governed(
     baseline: str,
     trace_path: str | Path,
@@ -735,19 +762,11 @@ def run_task(
         "status": "ok",
         # spec §11.2/§11.3: record the exact models used, all non-empty
         "worker_model": cfg["llm"],
-        "controller_model": (
-            "learned_controller(local_policy)"
-            if baseline == "learned_controller"
-            else (
-                (
-                    "qwen_rl(policy_gradient;"
-                    f"{qwen_api_model or qwen_base_model or os.environ.get('MARBLE_QWEN_BASE_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'})"
-                    if baseline == "qwen_rl"
-                    else f"qwen_sft({qwen_api_model or qwen_base_model or os.environ.get('MARBLE_QWEN_BASE_MODEL') or 'Qwen/Qwen3-4B-Instruct-2507'})"
-                )
-                if baseline in ("qwen_sft", "qwen_rl", "ours_sft", "ours_rl", "ours_base", "qwen_base")
-                else baseline
-            )
+        "controller_model": describe_controller(
+            baseline,
+            controller_checkpoint=controller_checkpoint,
+            qwen_base_model=qwen_base_model,
+            qwen_api_model=qwen_api_model,
         ),
         "evaluator_model": cfg["metrics"].get("evaluate_llm", ""),
         "retrieval": {
@@ -1072,8 +1091,10 @@ def _run_real_episode(
     effective_reward_kw = {"beta": beta, "lambda_": lambda_}
     effective_reward_kw.update(reward_kw)
     credits = proposal_rewards(
-        events, task_score=float(metrics.get("task_score") or 0.0),
+        events,
+        task_score=float(metrics.get("task_score") or 0.0),
         same_task_baseline=0.0,
+        task_success=metrics.get("task_success"),
         **effective_reward_kw,
     )
     (tdir / "reward.json").write_text(json.dumps(credits, indent=2), encoding="utf-8")

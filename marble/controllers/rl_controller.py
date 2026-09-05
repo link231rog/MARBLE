@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from marble.controllers.local_policy import VISIBILITIES, LocalPolicyController, features
-from marble.memory.schema import MemoryProposal
+from marble.memory.schema import MemoryItem, MemoryProposal
 
 
 def _as_proposal(d: Dict[str, Any]) -> MemoryProposal:
@@ -23,6 +23,20 @@ def _as_proposal(d: Dict[str, Any]) -> MemoryProposal:
         raw_value=str(d.get("raw_value", "")),
         step_index=int(d.get("step_index", 0)),
     )
+
+
+def _as_memory_item(d: Any) -> MemoryItem | None:
+    if isinstance(d, MemoryItem):
+        return d
+    if not isinstance(d, dict):
+        return None
+    clean = dict(d)
+    if "topics" in clean and isinstance(clean["topics"], list):
+        clean["topics"] = tuple(clean["topics"])
+    try:
+        return MemoryItem(**clean)
+    except Exception:
+        return None
 
 
 class RLTrainer:
@@ -50,7 +64,9 @@ class RLTrainer:
         chosen = target.get("visibility")
         if chosen not in VISIBILITIES:
             return False
-        feat = features(_as_proposal(proposal), [])
+        raw_active = event.get("active_memory_index") or []
+        active_items = [it for it in (_as_memory_item(x) for x in raw_active) if it is not None]
+        feat = features(_as_proposal(proposal), active_items)
         if credit >= 0:
             self.controller.update(feat, chosen, lr=self.lr * credit)
             return True
@@ -79,8 +95,14 @@ class RLTrainer:
         for ev in events:
             if ev.get("event") != "memory_decision":
                 continue
+            if ev.get("parse_status") in ("format_error", "schema_error"):
+                continue
+            pid = ev.get("proposal", {}).get("proposal_id")
             mid = ev.get("memory_id")
-            if mid and mid in credits and self.update_event(ev, credits[mid]):
+            credit = credits.get(pid) if pid else None
+            if credit is None and mid:
+                credit = credits.get(mid)
+            if credit is not None and self.update_event(ev, credit):
                 steps += 1
         if steps > 0:
             self.apply_anchor()
@@ -98,7 +120,7 @@ def train_rl(
     same_task_baseline: float = 0.0,
     outcome_gated: bool = True,
     target_card_budget: int = 12,
-    gamma_density: float = 0.02,
+    gamma_density: float = 0.0,
     anchor_coeff: float = 0.005,
 ) -> Dict[str, Any]:
     # Resolve warm-start checkpoint (Chapter 3 §2.1 & §3.1)
@@ -125,39 +147,60 @@ def train_rl(
     )
     from marble.memory.rewards import proposal_rewards
 
-    # Auto-resolve task scores and group-relative baseline (Chapter 3 §3.2)
-    if task_scores is None or len(task_scores) != len(trace_paths):
-        collected = []
-        for path in trace_paths:
-            summary_p = Path(path).with_name("summary.json")
-            score = r_episode
-            if summary_p.is_file():
-                try:
-                    with summary_p.open(encoding="utf-8") as sfh:
-                        score = float(json.load(sfh).get("task_score", r_episode))
-                except Exception:
-                    pass
-            collected.append(score)
-        task_scores = collected
-
-    if same_task_baseline == 0.0 and task_scores and len(task_scores) > 1:
-        same_task_baseline = sum(task_scores) / len(task_scores)
-
-    episodes = 0
-    steps = 0
+    # Auto-resolve task scores and group-relative baseline per (benchmark, task_id)
+    episodes: List[Dict[str, Any]] = []
+    scores_by_task: Dict[Tuple[str, str], List[float]] = {}
     for i, path in enumerate(trace_paths):
+        summary_p = Path(path).with_name("summary.json")
+        score = task_scores[i] if task_scores and i < len(task_scores) else r_episode
+        benchmark = ""
+        task_id = ""
+        if summary_p.is_file():
+            try:
+                with summary_p.open(encoding="utf-8") as sfh:
+                    s_data = json.load(sfh)
+                    if task_scores is None or i >= len(task_scores):
+                        score = float(s_data.get("task_score", r_episode))
+                    benchmark = str(s_data.get("benchmark", ""))
+                    task_id = str(s_data.get("task_id", ""))
+            except Exception:
+                pass
         with open(path, encoding="utf-8") as fh:
             events = [json.loads(line) for line in fh if line.strip()]
+        if not task_id:
+            for ev in events:
+                if ev.get("event") == "memory_decision":
+                    task_id = str(ev.get("proposal", {}).get("task_id", ""))
+                    if task_id:
+                        break
+        task_key = (benchmark, task_id or f"task_{i}")
+        scores_by_task.setdefault(task_key, []).append(score)
+        episodes.append({"events": events, "score": score, "task_key": task_key})
+
+    task_baselines: Dict[Tuple[str, str], float] = {}
+    for task_key, scores in scores_by_task.items():
+        if same_task_baseline > 0.0:
+            task_baselines[task_key] = same_task_baseline
+        elif len(scores) >= 2:
+            task_baselines[task_key] = sum(scores) / len(scores)
+        else:
+            task_baselines[task_key] = 0.0
+
+    episodes_count = 0
+    steps = 0
+    for ep in episodes:
+        events = ep["events"]
         decisions = [e for e in events if e.get("event") == "memory_decision"]
         if not decisions:
             continue
-        episodes += 1
-        ts = task_scores[i] if task_scores and i < len(task_scores) else r_episode
+        episodes_count += 1
+        ts = ep["score"]
+        base = task_baselines[ep["task_key"]]
 
         credits = proposal_rewards(
             events,
             task_score=ts,
-            same_task_baseline=same_task_baseline,
+            same_task_baseline=base,
             outcome_gated=outcome_gated,
             target_card_budget=target_card_budget,
             gamma_density=gamma_density,
@@ -165,7 +208,7 @@ def train_rl(
         for _ in range(epochs):
             steps += trainer.update_trace(events, credits)
     controller.save(out_path)
-    stats = {"episodes": episodes, "updates": steps, "out": out_path}
+    stats = {"episodes": episodes_count, "updates": steps, "out": out_path}
     print(json.dumps(stats))
     return stats
 
