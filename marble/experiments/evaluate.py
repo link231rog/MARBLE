@@ -343,9 +343,8 @@ def main(argv: List[str] | None = None) -> None:
     parser.add_argument("--manifest", help="frozen task manifest used for filtering")
     parser.add_argument(
         "--split",
-        choices=("all", "train", "test"),
         default="all",
-        help="manifest split to evaluate",
+        help="manifest split to evaluate (e.g. all, train, test, test_hard)",
     )
     args = parser.parse_args(argv)
 

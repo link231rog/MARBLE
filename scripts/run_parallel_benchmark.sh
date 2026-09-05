@@ -26,6 +26,7 @@ BASELINE="ours_base"
 SPLIT="test"
 BENCHMARK_TARGET="both"
 MAX_CARDS=5
+MAX_ITERATIONS=5
 CONCURRENCY=8
 ENABLE_COMM_GOV=""
 DRY_RUN=""
@@ -54,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -k|--max-cards)
             MAX_CARDS="$2"
+            shift 2
+            ;;
+        --max-iterations)
+            MAX_ITERATIONS="$2"
             shift 2
             ;;
         -c|--concurrency)
@@ -87,6 +92,10 @@ while [[ $# -gt 0 ]]; do
         --dry-run)
             DRY_RUN="--dry-run"
             shift 1
+            ;;
+        -m|--manifest)
+            MANIFEST="$2"
+            shift 2
             ;;
         -o|--out)
             OUT_DIR="$2"
@@ -214,7 +223,7 @@ launch_db_worker() {
                 --task-ids "$task_id" \
                 --baseline "$BASELINE" \
                 --seed 42 \
-                --max-iterations 5 \
+                --max-iterations "$MAX_ITERATIONS" \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
                 --lambda "$LAMBDA" \
@@ -259,7 +268,7 @@ launch_research_worker() {
                 --task-ids "$task_id" \
                 --baseline "$BASELINE" \
                 --seed 42 \
-                --max-iterations 5 \
+                --max-iterations "$MAX_ITERATIONS" \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
                 --lambda "$LAMBDA" \
