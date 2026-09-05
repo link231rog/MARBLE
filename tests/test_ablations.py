@@ -92,3 +92,13 @@ def test_reward_override_beta_and_lambda(tmp_path):
     assert controller_kwargs("input", "no_task_goal") == {"drop_fields": ("task_goal",)}
     assert controller_kwargs("input", "no_agent_tag") == {"drop_fields": ("agent_tag",)}
     assert reward_override("training", "scratch") == {}
+
+
+def test_comm_gov_ablation_parsing_and_config():
+    factor, option = parse_ablation("comm_gov:off")
+    assert factor == "comm_gov" and option == "off"
+    cfg = {"memory": {}}
+    out = apply_to_task_config(cfg, "comm_gov", "off")
+    assert out["memory"]["comm_governor"] is False
+    assert out["memory"]["ablation"] == "comm_gov:off"
+

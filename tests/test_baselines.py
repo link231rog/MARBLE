@@ -56,3 +56,14 @@ def test_memory_r1_spec_is_explicitly_distinct_from_ours():
 def test_unknown_baseline_is_rejected():
     with pytest.raises(ValueError, match="unknown baseline"):
         canonical_baseline("not-a-method")
+
+
+def test_ours_baselines_have_comm_governor_enabled_by_default():
+    for name in ("ours_base", "ours_sft", "ours_rl"):
+        spec = baseline_spec(name)
+        assert spec.enable_comm_governor is True, f"{name} must have comm_gov enabled"
+
+    for name in ("single_agent", "no_memory", "global_add_all", "lts_style", "mem0_style"):
+        spec = baseline_spec(name)
+        assert spec.enable_comm_governor is False, f"{name} must not have comm_gov enabled"
+

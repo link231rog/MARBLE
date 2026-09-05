@@ -12,7 +12,7 @@ from typing import Any, Dict, Sequence
 
 from marble.memory.schema import MemoryProposal, MemoryTargetState
 
-FACTORS = ("policy", "schema_field", "retrieval", "state_update", "reward", "training", "input")
+FACTORS = ("policy", "schema_field", "retrieval", "state_update", "reward", "training", "input", "comm_gov")
 
 SCHEMA_FIELDS = ("title", "value", "source", "agent_id", "task_id", "step_index")
 
@@ -56,6 +56,8 @@ def apply_to_task_config(cfg: Dict[str, Any], factor: str, option: str) -> Dict[
         cfg["memory"]["max_cards"] = 0
     elif factor == "state_update":
         cfg["memory"]["supersedes_enabled"] = option != "off"
+    elif factor == "comm_gov":
+        cfg["memory"]["comm_governor"] = option != "off"
     cfg["memory"]["ablation"] = f"{factor}:{option}"
     return cfg
 

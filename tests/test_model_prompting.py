@@ -115,7 +115,7 @@ class TestModelPrompting(unittest.TestCase):
             "marble.llms.model_prompting.litellm.completion",
             return_value=completion,
         ) as completion_mock, patch.dict(
-            "os.environ", {"MARBLE_REASONING_EFFORT": "high"}, clear=False
+            "os.environ", {"MARBLE_REASONING_EFFORT": "high", "OPENAI_API_BASE": "https://api.z.ai/api/paas/v4"}, clear=False
         ):
             model_prompting(
                 llm_model="openai/glm-4.7-flash",

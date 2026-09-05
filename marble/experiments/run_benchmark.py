@@ -719,8 +719,14 @@ def run_task(
     # runner must read the *effective* controller/max_cards back out of config.
     effective_baseline = baseline
     effective_max_cards = max_cards
+    spec = baseline_spec(baseline)
+    effective_comm_gov = enable_comm_governor or spec.enable_comm_governor or (
+        os.environ.get("MARBLE_ENABLE_COMM_GOVERNOR", "").lower() in ("1", "true")
+    )
+    if ablation and ("comm_gov:off" in ablation or "no_comm_gov" in ablation):
+        effective_comm_gov = False
     mem_block = cfg.get("memory")
-    if baseline_spec(baseline).uses_memory and isinstance(mem_block, dict):
+    if spec.uses_memory and isinstance(mem_block, dict):
         effective_baseline = mem_block.get("controller", baseline)
         if "max_cards" in mem_block:
             effective_max_cards = mem_block["max_cards"]
@@ -741,7 +747,7 @@ def run_task(
         "ablation": ablation,
         "manifest": manifest,
         "provider": provider,
-        "comm_governor": enable_comm_governor,
+        "comm_governor": effective_comm_gov,
         "status": "ok",
         # spec §11.2/§11.3: record the exact models used, all non-empty
         "worker_model": cfg["llm"],
@@ -771,7 +777,7 @@ def run_task(
         (
             f"method={baseline}",
             f"ablation={ablation or 'none'}",
-            f"comm_gov={'on' if enable_comm_governor else 'off'}",
+            f"comm_gov={'on' if effective_comm_gov else 'off'}",
             f"retrieval={retriever}",
             f"max_cards={effective_max_cards}",
             f"max_reads_per_step={max_reads_per_step}",
@@ -817,7 +823,7 @@ def run_task(
             lambda_=lambda_,
             beta=beta,
             provider=provider,
-            enable_comm_governor=enable_comm_governor,
+            enable_comm_governor=effective_comm_gov,
         )
         summary.update(metrics)
         if metrics.get("score_status") != "available":

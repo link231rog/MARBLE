@@ -25,6 +25,7 @@ class BaselineSpec:
     uses_memory: bool
     single_agent: bool = False
     requires_crud_manager: bool = False
+    enable_comm_governor: bool = False
 
 
 MAIN_BASELINES: Tuple[str, ...] = (
@@ -105,9 +106,9 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
         uses_memory=True,
         requires_crud_manager=True,
     ),
-    "ours_base": BaselineSpec("ours_base", controller="qwen_sft", uses_memory=True),
-    "ours_sft": BaselineSpec("ours_sft", controller="qwen_sft", uses_memory=True),
-    "ours_rl": BaselineSpec("ours_rl", controller="qwen_rl", uses_memory=True),
+    "ours_base": BaselineSpec("ours_base", controller="qwen_sft", uses_memory=True, enable_comm_governor=True),
+    "ours_sft": BaselineSpec("ours_sft", controller="qwen_sft", uses_memory=True, enable_comm_governor=True),
+    "ours_rl": BaselineSpec("ours_rl", controller="qwen_rl", uses_memory=True, enable_comm_governor=True),
     # Auxiliary diagnostics are intentionally excluded from MAIN_BASELINES.
     "private_only": BaselineSpec("private_only", controller="private_only", uses_memory=True),
     "heuristic": BaselineSpec("heuristic", controller="heuristic", uses_memory=True),
