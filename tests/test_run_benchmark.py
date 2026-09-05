@@ -674,3 +674,45 @@ def test_visible_k_retriever_accepted_without_warning(capsys, tmp_path, monkeypa
     assert "[warn] retrieval 'visible_k' not implemented" not in captured.out
     assert summary["retrieval"]["name"] == "visible_k"
 
+
+def test_summary_resume_config_mismatch_reruns(tmp_path, monkeypatch):
+    t = _task()
+    tdir = tmp_path / "heuristic" / "coding" / str(t.task_id)
+    tdir.mkdir(parents=True)
+    # Write a summary with max_cards=6
+    stale_summary = {
+        "status": "ok",
+        "method": "heuristic",
+        "task_id": t.task_id,
+        "seed": 42,
+        "setting": "method=heuristic|ablation=none|comm_gov=off|retrieval=key_first|max_cards=6|max_reads_per_step=2|lambda=0.05|beta=0.25",
+    }
+    (tdir / "summary.json").write_text(json.dumps(stale_summary))
+
+    called = []
+    def mock_run_real_episode(*args, **kwargs):
+        called.append(True)
+        return {"score_status": "available", "task_score": 1.0}
+
+    monkeypatch.setattr("marble.experiments.run_benchmark._run_real_episode", mock_run_real_episode)
+    # When running with max_cards=5 (the frozen default), the setting mismatches!
+    summary = run_task(t, "heuristic", tmp_path, seed=42, max_cards=5)
+    # It must re-run rather than return the stale max_cards=6 summary
+    assert len(called) == 1
+    assert summary["retrieval"]["max_cards"] == 5
+
+
+def test_default_max_cards_is_five_across_entrypoints():
+    from marble.experiments.engine_bridge import MemoryStep
+    from marble.experiments.run_benchmark import _build_arg_parser
+
+    # 1. Engine bridge MemoryStep default
+    step = MemoryStep(None)
+    assert step.max_cards == 5, f"MemoryStep default must be 5, got {step.max_cards}"
+
+    # 2. CLI argument parser default
+    parser = _build_arg_parser()
+    args = parser.parse_args(["--benchmark", "database"])
+    assert args.max_cards == 5, f"CLI --max-cards default must be 5, got {args.max_cards}"
+
+

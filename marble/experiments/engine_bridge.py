@@ -21,7 +21,7 @@ class MemoryStep:
         self,
         memory: Optional[GovernedMemory],
         selector_fn: Optional[Callable[[str], str]] = None,
-        max_cards: int = 6,
+        max_cards: int = 5,
         max_reads_per_step: int = 2,
         selector: str = "callable",
         task_goal: str = "",

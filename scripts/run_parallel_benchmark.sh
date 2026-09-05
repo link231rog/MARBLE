@@ -18,7 +18,7 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-UV="/Users/huangzixuan/.local/bin/uv"
+UV="${UV:-$(command -v uv || echo "uv")}"
 MANIFEST="configs/experiments/multiagentbench_stratified_frozen.json"
 
 # Default arguments
@@ -27,7 +27,7 @@ SPLIT="test"
 BENCHMARK_TARGET="both"
 MAX_CARDS=5
 MAX_ITERATIONS=5
-CONCURRENCY=8
+CONCURRENCY="${CONCURRENCY:-4}"
 ENABLE_COMM_GOV=""
 DRY_RUN=""
 OUT_DIR=""
@@ -197,6 +197,7 @@ launch_db_worker() {
     local w_key="$(get_worker_key "$worker_id")"
 
     (
+        trap 'docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true' EXIT INT TERM
         export MARBLE_DB_PORT="$db_port"
         export MARBLE_PROM_PORT="$prom_port"
         export MARBLE_NODE_PORT="$node_port"

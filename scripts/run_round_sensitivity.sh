@@ -16,10 +16,10 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-UV="/Users/huangzixuan/.local/bin/uv"
+UV="${UV:-$(command -v uv || echo "uv")}"
 MANIFEST="configs/experiments/multiagentbench_hard_frozen.json"
 SPLIT="test_hard"
-CONCURRENCY=16
+CONCURRENCY="${CONCURRENCY:-4}"
 CKPT="${1:-runs/ours_rl_v2_policy.json}"
 
 cleanup_docker() {
@@ -33,6 +33,7 @@ echo "  Manifest:    $MANIFEST"
 echo "  Split:       $SPLIT"
 echo "  Policy:      $CKPT"
 echo "  Sweep T:     2, 4, 6, 8, 10"
+echo "  Concurrency: $CONCURRENCY Workers"
 echo "======================================================================"
 
 cleanup_docker
@@ -48,7 +49,7 @@ is_run_completed() {
     return 1
 }
 
-SWEEP_ROUNDS=(2 4 6 8 10 12 14)
+SWEEP_ROUNDS=(2 4 6 8 10)
 
 for T in "${SWEEP_ROUNDS[@]}"; do
     echo ""

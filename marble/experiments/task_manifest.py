@@ -37,10 +37,11 @@ def select_manifest_tasks(tasks: Iterable[Any], path: str | Path) -> list[Any]:
 def build_frozen_manifest(tasks: Iterable[Any], *, seed: int = 42) -> tuple[list[Any], list[Any]]:
     """Return six training and eighteen test tasks.
 
-    Database contributes 3/9 tasks. Research contributes 3/9 tasks, with its
-    research split balanced across 3, 4, and 5 agents. ``seed`` is retained in
-    the API for manifest metadata; selection is ID-stable once the manifest is
-    checked in.
+    Database contributes 3 train and 9 test tasks (12 total, all 5-agent).
+    Research contributes 3 train and 9 test tasks (12 total), with its tasks
+    stratified across 3, 4, and 5 agents (1 train and 3 test tasks per agent count).
+    ``seed`` is retained in the API for manifest metadata; selection is ID-stable
+    once the manifest is checked in.
     """
     del seed
     grouped: dict[tuple[str, int], list[Any]] = {}

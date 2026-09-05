@@ -686,22 +686,6 @@ def run_task(
 
     _append_run_event(out_root, "task_start", task, baseline=baseline)
 
-    completed = tdir / "summary.json"
-    if completed.exists():
-        try:
-            previous = json.loads(completed.read_text())
-            if previous.get("status") in {"ok", "score_unavailable"}:
-                _append_run_event(
-                    out_root,
-                    "task_skip",
-                    task,
-                    baseline=baseline,
-                    status=previous["status"],
-                )
-                return previous
-        except Exception:
-            pass
-
     errors: List[str] = []
 
     cfg = task_config(
@@ -785,6 +769,46 @@ def run_task(
             f"beta={beta:g}",
         )
     )
+    completed = tdir / "summary.json"
+    if completed.exists():
+        try:
+            previous = json.loads(completed.read_text(encoding="utf-8"))
+            status_ok = previous.get("status") in {"ok", "score_unavailable"}
+            if "setting" in previous:
+                setting_ok = previous["setting"] == summary["setting"]
+            else:
+                setting_ok = previous.get("method") == summary["method"]
+            seed_ok = (previous["seed"] == seed) if ("seed" in previous and seed is not None) else True
+            worker_model_ok = (previous["worker_model"] == summary["worker_model"]) if "worker_model" in previous else True
+            controller_model_ok = (previous["controller_model"] == summary["controller_model"]) if "controller_model" in previous else True
+            provider_ok = (previous["provider"] == summary["provider"]) if "provider" in previous else True
+
+            if status_ok and setting_ok and seed_ok and worker_model_ok and controller_model_ok and provider_ok:
+                _append_run_event(
+                    out_root,
+                    "task_skip",
+                    task,
+                    baseline=baseline,
+                    status=previous["status"],
+                )
+                return previous
+            else:
+                mismatches = []
+                if not status_ok:
+                    mismatches.append(f"status={previous.get('status')}")
+                if not setting_ok:
+                    mismatches.append(f"setting: previous='{previous.get('setting')}' vs expected='{summary['setting']}'")
+                if not seed_ok:
+                    mismatches.append(f"seed: previous={previous.get('seed')} vs expected={seed}")
+                if not worker_model_ok:
+                    mismatches.append(f"worker_model: previous='{previous.get('worker_model')}' vs expected='{summary['worker_model']}'")
+                if not controller_model_ok:
+                    mismatches.append(f"controller_model: previous='{previous.get('controller_model')}' vs expected='{summary['controller_model']}'")
+                if not provider_ok:
+                    mismatches.append(f"provider: previous='{previous.get('provider')}' vs expected='{summary['provider']}'")
+                print(f"[info] Task {task.benchmark}:{task.task_id} existing summary config mismatch ({'; '.join(mismatches)}). Re-running...")
+        except Exception as exc:
+            print(f"[warn] Failed to read existing summary.json for {task.benchmark}:{task.task_id}: {exc}")
 
     if dry_run:
         summary["status"] = "dry_run"
@@ -957,6 +981,7 @@ def _run_real_episode(
     prev_cwd = os.getcwd()
     usage_meter = ApiUsageMeter()
     os.chdir(marble_dir)
+    engine = None
     try:
         with usage_meter:
             engine = EngineCls(config)
@@ -979,6 +1004,13 @@ def _run_real_episode(
                     print(f"[warn] evaluator.update failed: {exc}")
     finally:
         os.chdir(prev_cwd)
+        if engine is not None:
+            env = getattr(engine, "environment", None)
+            if env is not None and hasattr(env, "terminate"):
+                try:
+                    env.terminate()
+                except Exception as exc:
+                    print(f"[warn] env.terminate failed during episode cleanup: {exc}")
 
     api_usage = usage_meter.snapshot()
     metrics: Dict[str, Any] = {
@@ -1179,7 +1211,7 @@ def _benchmark_score(benchmark: str, evaluator, task_content: str, result_text: 
 
 
 # ------------------------------------------------------------------------ CLI
-def main(argv: Optional[List[str]] = None) -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Run governed-memory baselines on MultiAgentBench")
     ap.add_argument("--benchmark", required=True,
                     help=f"one of {BENCHMARKS}, comma-separated, or 'all'")
@@ -1193,7 +1225,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--max-iterations", type=int, default=None)
     ap.add_argument("--retrieval", default="key_first")
-    ap.add_argument("--max-cards", type=int, default=6)
+    ap.add_argument("--max-cards", type=int, default=5)
     ap.add_argument("--max-reads-per-step", type=int, default=2)
     ap.add_argument("--lambda", dest="lambda_", type=float, default=0.15)
     ap.add_argument("--beta", type=float, default=0.25)
@@ -1241,6 +1273,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         default=None,
         help="explicit run root; omit to create a timestamped run under runs/",
     )
+    return ap
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    ap = _build_arg_parser()
     args = ap.parse_args(argv)
     if args.provider:
         _configure_provider(args.provider)

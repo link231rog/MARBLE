@@ -58,12 +58,8 @@ def test_unknown_baseline_is_rejected():
         canonical_baseline("not-a-method")
 
 
-def test_ours_baselines_have_comm_governor_enabled_by_default():
-    for name in ("ours_base", "ours_sft", "ours_rl"):
+def test_baselines_comm_governor_defaults_to_false():
+    for name in ("ours_base", "ours_sft", "ours_rl", "single_agent", "no_memory", "global_add_all", "lts_style", "mem0_style"):
         spec = baseline_spec(name)
-        assert spec.enable_comm_governor is True, f"{name} must have comm_gov enabled"
-
-    for name in ("single_agent", "no_memory", "global_add_all", "lts_style", "mem0_style"):
-        spec = baseline_spec(name)
-        assert spec.enable_comm_governor is False, f"{name} must not have comm_gov enabled"
+        assert spec.enable_comm_governor is False, f"{name} must have comm_gov disabled by default to isolate variables"
 
