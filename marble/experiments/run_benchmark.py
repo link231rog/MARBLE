@@ -149,6 +149,8 @@ def make_controller(
 ) -> Any:
     baseline = canonical_baseline(baseline)
     spec = baseline_spec(baseline)
+    if baseline == "ours_private_to_global" and not ablation:
+        ablation = "visibility:private_to_global"
     controller: Any = None
     if spec.controller == "absent":
         controller = AbsentController()
@@ -238,26 +240,34 @@ def describe_controller(
     controller_checkpoint: Optional[str] = None,
     qwen_base_model: Optional[str] = None,
     qwen_api_model: Optional[str] = None,
+    ablation: Optional[str] = None,
 ) -> str:
     """Accurately identify controller type and backend without mislabeling (spec §12.3 R07)."""
     canonical = canonical_baseline(baseline)
     spec = baseline_spec(canonical)
+    desc: str
     if spec.controller in ("local_policy",):
         ckpt_name = Path(controller_checkpoint).name if controller_checkpoint else "untrained"
-        return f"local_policy(linear;{ckpt_name})"
-    if spec.controller in ("qwen_sft", "qwen_rl"):
+        desc = f"local_policy(linear;{ckpt_name})"
+    elif spec.controller in ("qwen_sft", "qwen_rl"):
         if controller_checkpoint and str(controller_checkpoint).endswith(".json"):
-            return f"local_policy(linear;{Path(controller_checkpoint).name})"
-        model_name = (
-            qwen_api_model
-            or qwen_base_model
-            or os.environ.get("MARBLE_QWEN_BASE_MODEL")
-            or "Qwen/Qwen3-4B-Instruct-2507"
-        )
-        adapter = Path(controller_checkpoint).name if controller_checkpoint else "none"
-        prefix = "qwen_rl" if spec.controller == "qwen_rl" else "qwen_sft"
-        return f"{prefix}(model={model_name};adapter={adapter})"
-    return canonical
+            desc = f"local_policy(linear;{Path(controller_checkpoint).name})"
+        else:
+            model_name = (
+                qwen_api_model
+                or qwen_base_model
+                or os.environ.get("MARBLE_QWEN_BASE_MODEL")
+                or "Qwen/Qwen3-4B-Instruct-2507"
+            )
+            adapter = Path(controller_checkpoint).name if controller_checkpoint else "none"
+            prefix = "qwen_rl" if spec.controller == "qwen_rl" else "qwen_sft"
+            desc = f"{prefix}(model={model_name};adapter={adapter})"
+    else:
+        desc = canonical
+
+    if canonical == "ours_private_to_global" or (ablation and "private_to_global" in ablation):
+        desc = f"{desc}[ablation=private_to_global]"
+    return desc
 
 
 def make_governed(
@@ -691,6 +701,8 @@ def run_task(
     if beta < 0:
         raise ValueError("beta must be non-negative")
     baseline = canonical_baseline(baseline)
+    if baseline == "ours_private_to_global" and not ablation:
+        ablation = "visibility:private_to_global"
     if provider:
         _configure_provider(provider)
     if seed is not None:
@@ -767,6 +779,7 @@ def run_task(
             controller_checkpoint=controller_checkpoint,
             qwen_base_model=qwen_base_model,
             qwen_api_model=qwen_api_model,
+            ablation=ablation,
         ),
         "evaluator_model": cfg["metrics"].get("evaluate_llm", ""),
         "retrieval": {
@@ -1066,8 +1079,24 @@ def _run_real_episode(
         metrics["score_status"] = "unavailable"
 
     events = _read_jsonl(tdir / "memory_trace.jsonl")
-    memory_metrics = evaluate_memory_trace(events)
+    memory_metrics = evaluate_memory_trace(
+        events,
+        task_success=metrics.get("task_success"),
+        task_score=float(metrics.get("task_score") or 0.0),
+    )
     metrics["memory_metrics"] = memory_metrics
+    for metric_name in (
+        "active_memory_count",
+        "private_written",
+        "private_read",
+        "private_owner_reuse",
+        "global_non_owner_reuse",
+        "cross_agent_exposure",
+        "cross_agent_reads",
+        "negative_transfer",
+    ):
+        if metric_name in memory_metrics:
+            metrics[metric_name] = memory_metrics[metric_name]
     metrics["memory_cost"] = measured_memory_cost(events)
     metrics["controller_api_calls"] = sum(
         int(event.get("manager_api_calls", 0) or 0)

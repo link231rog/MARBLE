@@ -46,6 +46,8 @@ def main():
                 "setting": method_key,
                 "task_score": agg[method_key].get("task_score", 0.0),
                 "task_score_se": agg[method_key].get("task_score_se", 0.0),
+                "task_success": agg[method_key].get("task_success", 0.0),
+                "task_success_se": agg[method_key].get("task_success_se", 0.0),
                 "total_tokens": agg[method_key].get("total_tokens", 0.0),
                 "total_tokens_se": agg[method_key].get("total_tokens_se", 0.0),
                 "active_memory_count": agg[method_key].get("memory.active_memory_count", 0.0),
@@ -53,8 +55,14 @@ def main():
                 "active_global_count": agg[method_key].get("memory.active_global_count", 0.0),
                 "private_decisions": agg[method_key].get("memory.private", 0.0),
                 "global_decisions": agg[method_key].get("memory.global", 0.0),
+                "private_written": agg[method_key].get("memory.private_written", 0.0),
+                "private_read": agg[method_key].get("memory.private_read", 0.0),
+                "private_owner_reuse": agg[method_key].get("memory.private_owner_reuse", 0.0),
+                "global_non_owner_reuse": agg[method_key].get("memory.global_non_owner_reuse", 0.0),
+                "cross_agent_exposure": agg[method_key].get("memory.cross_agent_exposure", 0.0),
                 "supersessions": agg[method_key].get("memory.supersessions", 0.0),
                 "cross_agent_reads": agg[method_key].get("memory.cross_agent_reads", 0.0),
+                "negative_transfer": agg[method_key].get("memory.negative_transfer", 0.0),
                 "reuse_rate": agg[method_key].get("memory.reuse_rate", 0.0),
             }
             # Calculate private ratio if any decisions

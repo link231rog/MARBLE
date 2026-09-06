@@ -102,3 +102,28 @@ def test_comm_gov_ablation_parsing_and_config():
     assert out["memory"]["comm_governor"] is False
     assert out["memory"]["ablation"] == "comm_gov:off"
 
+
+def test_private_to_global_ablation():
+    from marble.controllers import PrivateOnlyController
+    from marble.experiments.ablations import PrivateToGlobal
+
+    factor, option = parse_ablation("visibility:private_to_global")
+    assert factor == "visibility" and option == "private_to_global"
+
+    inner = PrivateOnlyController()
+    wrapped = wrap_controller(inner, "visibility", "private_to_global")
+    assert isinstance(wrapped, PrivateToGlobal)
+
+    # PrivateOnlyController would produce 'private'; wrapped forces 'global'
+    target_unwrapped = inner.decide(_proposal(), [])
+    assert target_unwrapped.visibility == "private"
+    target_wrapped = wrapped.decide(_proposal(), [])
+    assert target_wrapped.visibility == "global"
+    assert target_wrapped.exists == target_unwrapped.exists
+
+    cfg = {"memory": {}}
+    out = apply_to_task_config(cfg, "visibility", "private_to_global")
+    assert out["memory"]["privacy_ablation"] == "private_to_global"
+    assert out["memory"]["ablation"] == "visibility:private_to_global"
+
+

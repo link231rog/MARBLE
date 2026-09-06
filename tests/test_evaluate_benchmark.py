@@ -300,3 +300,29 @@ def test_compute_paired_memory_dependency():
     assert res["memory_sensitive_tasks"] == ["db:1"]
     assert res["memory_insensitive_tasks"] == ["db:2"]
 
+
+def test_trace_metrics_section_12_7_spec():
+    """Spec §12.7.3: private/global exposure, reads, owner vs non-owner reuse, and negative transfer."""
+    events = [
+        _decision("m_priv", "a1", "private"),
+        _decision("m_glob", "a1", "global"),
+        {"event": "memory_exposure", "memory_ids": ["m_priv"], "reader_id": "a1"},
+        {"event": "memory_exposure", "memory_ids": ["m_glob"], "reader_id": "a2"},
+        _read("m_priv", "a1"),  # private owner reuse
+        _read("m_glob", "a2"),  # global non-owner reuse (cross-agent read)
+    ]
+    # In a successful task (task_success=1.0): negative_transfer is 0
+    m_ok = evaluate_memory_trace(events, task_success=1.0)
+    assert m_ok["private_written"] == 1
+    assert m_ok["private_read"] == 1
+    assert m_ok["private_owner_reuse"] == 1
+    assert m_ok["global_non_owner_reuse"] == 1
+    assert m_ok["cross_agent_reads"] == 1
+    assert m_ok["cross_agent_exposure"] == 1  # only m_glob was cross-agent exposed to a2
+    assert m_ok["negative_transfer"] == 0
+
+    # In a failed task (task_success=0.0): cross-agent reads are counted as negative transfer
+    m_fail = evaluate_memory_trace(events, task_success=0.0)
+    assert m_fail["negative_transfer"] == 1
+
+

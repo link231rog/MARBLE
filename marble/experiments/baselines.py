@@ -109,6 +109,9 @@ BASELINE_REGISTRY: Dict[str, BaselineSpec] = {
     "ours_base": BaselineSpec("ours_base", controller="qwen_sft", uses_memory=True),
     "ours_sft": BaselineSpec("ours_sft", controller="qwen_sft", uses_memory=True),
     "ours_rl": BaselineSpec("ours_rl", controller="qwen_rl", uses_memory=True),
+    "ours_private_to_global": BaselineSpec(
+        "ours_private_to_global", controller="qwen_rl", uses_memory=True
+    ),
     # Auxiliary diagnostics are intentionally excluded from MAIN_BASELINES.
     "private_only": BaselineSpec("private_only", controller="private_only", uses_memory=True),
     "heuristic": BaselineSpec("heuristic", controller="heuristic", uses_memory=True),
@@ -134,6 +137,7 @@ ALIASES = {
     "ours_prompted": "ours_base",
     "qwen_sft": "ours_sft",
     "qwen_rl": "ours_rl",
+    "ours-private-to-global": "ours_private_to_global",
 }
 
 
@@ -142,7 +146,7 @@ def canonical_baseline(name: str) -> str:
     """Resolve a legacy spelling, raising a useful error for unknown methods."""
     canonical = ALIASES.get(name, name)
     if canonical not in BASELINE_REGISTRY:
-        choices = ", ".join((*MAIN_BASELINES, "private_only", "heuristic", "learned_controller"))
+        choices = ", ".join((*MAIN_BASELINES, "private_only", "heuristic", "learned_controller", "ours_private_to_global"))
         raise ValueError(f"unknown baseline {name!r}; choose from {choices} or 'multi'")
     return canonical
 

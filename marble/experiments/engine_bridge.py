@@ -55,7 +55,7 @@ class MemoryStep:
         controller = getattr(self.memory, "controller", None)
         if controller is not None and hasattr(controller, "set_context"):
             controller.set_context(self.task_goal, self.agent_role_map)
-        eff_top_k = 20 if self.baseline == "global_add_all" else self.max_cards
+        eff_top_k = self.max_cards
         cards = self.memory.visible_keys(
             reader_id=agent_id, task_id=self.task_id, query=task_text, top_k=eff_top_k
         )
@@ -98,7 +98,7 @@ class MemoryStep:
 
     def _read_selected(self, agent_id: str, cards) -> List[str]:
         assert self.memory is not None  # only called from before_act after the None guard
-        max_reads = len(cards) if self.baseline == "global_add_all" else self.max_reads_per_step
+        max_reads = self.max_reads_per_step
         chosen = self._select_ids(agent_id, cards)[: max_reads]
         notes: List[str] = []
         for mid in chosen:
@@ -113,7 +113,7 @@ class MemoryStep:
     def _select_ids(self, agent_id: str, cards) -> List[str]:
         if self.selector == "top":
             # rank-order default: read the top-ranked cards without an extra API call
-            max_reads = len(cards) if self.baseline == "global_add_all" else self.max_reads_per_step
+            max_reads = self.max_reads_per_step
             return [c.memory_id for c in cards[: max_reads]]
         if self.selector_fn is None:
             return []

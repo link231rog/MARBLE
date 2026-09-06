@@ -236,9 +236,25 @@ def test_selector_top_reads_top_ranked_cards(tmp_path):
     text = harness.before_act("reader", "t")
     assert "alpha" in text and "beta" not in text  # top-1 read, capped
     assert harness.reads_this_episode == 1
-    assert harness.reads_this_episode == 1
     events = [
         e for e in _events(trace_path)
         if e.get("event") == "memory_read"
     ]
     assert events and events[0]["memory_id"] == item.memory_id
+
+
+def test_global_add_all_respects_max_cards_and_reads_budget(tmp_path):
+    """Spec §12.7.3: global_add_all must respect max_cards=5 and max_reads_per_step=2 without bypass."""
+    mem, trace_path = _memory(tmp_path)
+    items = [_store_global(mem, title=f"item_{i}", value=f"val_{i}") for i in range(10)]
+    harness = MemoryStep(
+        mem, max_cards=5, max_reads_per_step=2, selector="top", baseline="global_add_all"
+    )
+    harness.task_id = "t"
+    text = harness.before_act("reader", "run task")
+    assert harness.reads_this_episode == 2
+    events = [e for e in _events(trace_path) if e.get("event") == "memory_read"]
+    assert len(events) == 2
+    exposure = next(e for e in _events(trace_path) if e.get("event") == "memory_exposure")
+    assert len(exposure["memory_ids"]) == 5
+

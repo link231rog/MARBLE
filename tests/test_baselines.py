@@ -33,6 +33,7 @@ def test_main_baselines_match_frozen_experiment_matrix():
         ("global_always", "global_add_all"),
         ("qwen_sft", "ours_sft"),
         ("qwen_rl", "ours_rl"),
+        ("ours-private-to-global", "ours_private_to_global"),
     ],
 )
 def test_legacy_names_resolve_to_canonical_methods(legacy, canonical):

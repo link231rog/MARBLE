@@ -102,8 +102,12 @@ def format_report(report: Dict[str, Any]) -> str:
 
 
 # ------------------------------------------------------- benchmark-run metrics
-def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Memory metrics from one memory_trace.jsonl (spec §13)."""
+def evaluate_memory_trace(
+    events: List[Dict[str, Any]],
+    task_success: Optional[Any] = None,
+    task_score: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Memory metrics from one memory_trace.jsonl (spec §13, §12.7.3)."""
     decisions = [e for e in events if e.get("event") == "memory_decision"]
     r1_operations = [
         e for e in events if e.get("event") in ("memory_r1_operation", "classical_memory_operation")
@@ -112,12 +116,14 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(stored)
     by_vis: Dict[str, int] = {"private": 0, "global": 0, "absent": 0}
     owners: Dict[str, str] = {}
+    visibilities: Dict[str, str] = {}
     superseded_ids = set()
     active_items: Dict[str, Dict[str, Any]] = {}
     for e in stored:
         vis = e["target"].get("visibility")
         by_vis[vis] = by_vis.get(vis, 0) + 1
         owners[e["memory_id"]] = e["proposal"]["agent_id"]
+        visibilities[e["memory_id"]] = vis
         if e["target"].get("supersedes"):
             superseded_ids.add(e["target"]["supersedes"])
         memory_id = e["memory_id"]
@@ -136,6 +142,7 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             proposal = e.get("proposal") or {}
             if isinstance(proposal.get("agent_id"), str):
                 owners[memory_id] = proposal["agent_id"]
+            visibilities[memory_id] = "global"
             active_items[memory_id] = {
                 "visibility": "global",
                 "tokens": token_count(proposal.get("raw_value", "")),
@@ -147,7 +154,7 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         if e.get("event") == "memory_read" and isinstance(e.get("memory_id"), str)
     ]
     exposures = [e for e in events if e.get("event") == "memory_exposure"]
-    cross = sum(1 for e in reads if owners.get(e["memory_id"]) != e.get("reader_id"))
+    cross = sum(1 for e in reads if owners.get(e["memory_id"]) and owners.get(e["memory_id"]) != e.get("reader_id"))
 
     # Reads per memory_id
     read_counts: Dict[str, int] = {}
@@ -156,7 +163,7 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         mid = e.get("memory_id")
         if mid:
             read_counts[mid] = read_counts.get(mid, 0) + 1
-            if owners.get(mid) != e.get("reader_id"):
+            if owners.get(mid) and owners.get(mid) != e.get("reader_id"):
                 cross_read_counts[mid] = cross_read_counts.get(mid, 0) + 1
 
     # R16: read coverage (>=1 read) vs repeated reuse (>=2 reads)
@@ -186,6 +193,37 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     active_private = [
         item for item in active_items.values() if item["visibility"] == "private"
     ]
+
+    # Spec §12.7.3: private/global exposure, reads, owner vs non-owner reuse, and negative transfer
+    private_written = by_vis.get("private", 0)
+    private_read = sum(1 for e in reads if visibilities.get(e.get("memory_id")) == "private")
+    private_owner_reuse = sum(
+        1 for e in reads
+        if visibilities.get(e.get("memory_id")) == "private"
+        and owners.get(e.get("memory_id")) == e.get("reader_id")
+    )
+    global_non_owner_reuse = sum(
+        1 for e in reads
+        if visibilities.get(e.get("memory_id")) == "global"
+        and owners.get(e.get("memory_id"))
+        and owners.get(e.get("memory_id")) != e.get("reader_id")
+    )
+    cross_agent_exposure = sum(
+        1
+        for e in exposures
+        for mid in (e.get("memory_ids") or [])
+        if owners.get(mid) and owners.get(mid) != e.get("reader_id")
+    )
+
+    if task_success is not None:
+        is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 1.0)
+    elif task_score is not None:
+        is_success = (float(task_score) >= 1.0)
+    else:
+        is_success = True
+
+    negative_transfer = cross if not is_success else 0
+
     return {
         "decisions_total": total,
         "proposals_total": total_decisions,
@@ -222,6 +260,12 @@ def evaluate_memory_trace(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "active_memory_tokens": sum(item["tokens"] for item in active_items.values()),
         "active_global_tokens": sum(item["tokens"] for item in active_global),
         "active_private_tokens": sum(item["tokens"] for item in active_private),
+        "private_written": private_written,
+        "private_read": private_read,
+        "private_owner_reuse": private_owner_reuse,
+        "global_non_owner_reuse": global_non_owner_reuse,
+        "cross_agent_exposure": cross_agent_exposure,
+        "negative_transfer": negative_transfer,
     }
 
 
@@ -230,6 +274,13 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
     task_dir = os.fspath(task_dir)
     with open(os.path.join(task_dir, "summary.json"), encoding="utf-8") as fh:
         summary = json.load(fh)
+    task_success_val = summary.get("task_success")
+    task_score_val = summary.get("task_score", 0.0)
+    memory_metrics = evaluate_memory_trace(
+        _read_jsonl(os.path.join(task_dir, "memory_trace.jsonl")),
+        task_success=task_success_val,
+        task_score=task_score_val,
+    )
     row: Dict[str, Any] = {
         "method": summary.get("method"),
         "setting": setting_key(summary),
@@ -240,8 +291,12 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         "ablation": summary.get("ablation"),
         "manifest": summary.get("manifest"),
         "status": summary.get("status"),
-        "task_score": summary.get("task_score", 0.0),
-        "task_success": summary.get("task_success"),
+        "task_score": task_score_val,
+        "task_success": (
+            float(task_success_val)
+            if task_success_val is not None
+            else (1.0 if float(task_score_val or 0.0) >= 1.0 else 0.0)
+        ),
         "score_status": summary.get("score_status", "unavailable"),
         "episode_latency_s": summary.get("episode_latency_s"),
         "worker_tokens": summary.get("worker_tokens"),
@@ -253,9 +308,15 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         "episode_reward": summary.get("episode_reward"),
         "retrieval": summary.get("retrieval", {}),
         "reward_config": summary.get("reward_config", {}),
-        "memory": evaluate_memory_trace(
-            _read_jsonl(os.path.join(task_dir, "memory_trace.jsonl"))
-        ),
+        "active_memory_count": memory_metrics.get("active_memory_count", 0),
+        "private_written": memory_metrics.get("private_written", 0),
+        "private_read": memory_metrics.get("private_read", 0),
+        "private_owner_reuse": memory_metrics.get("private_owner_reuse", 0),
+        "global_non_owner_reuse": memory_metrics.get("global_non_owner_reuse", 0),
+        "cross_agent_exposure": memory_metrics.get("cross_agent_exposure", 0),
+        "cross_agent_reads": memory_metrics.get("cross_agent_reads", 0),
+        "negative_transfer": memory_metrics.get("negative_transfer", 0),
+        "memory": memory_metrics,
     }
     reward_path = os.path.join(task_dir, "reward.json")
     if os.path.exists(reward_path):
