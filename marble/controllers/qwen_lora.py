@@ -16,6 +16,7 @@ episode rewards for completion-level REINFORCE.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -93,6 +94,15 @@ def api_generate_fn(
 
 
 
+def _hf_local_files_only() -> bool:
+    """Return True unless MARBLE_ALLOW_HF_DOWNLOAD=1 is explicitly set.
+
+    Guards against accidental multi-gigabyte weight downloads on local dev machines.
+    """
+    return os.environ.get("MARBLE_ALLOW_HF_DOWNLOAD") != "1"
+
+
+
 def local_generate_fn(
     model_path: str,
     lora_dir: Optional[str] = None,
@@ -102,9 +112,13 @@ def local_generate_fn(
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(model_path)
+    local_only = _hf_local_files_only()
+    tok = AutoTokenizer.from_pretrained(model_path, local_files_only=local_only)
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, device_map="auto"
+        model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        local_files_only=local_only,
     )
     if lora_dir:
         from peft import PeftModel
@@ -438,13 +452,17 @@ def train_qwen_sft(
     )
     from peft import LoraConfig, get_peft_model
 
-    tok = AutoTokenizer.from_pretrained(base_model)
+    local_only = _hf_local_files_only()
+    tok = AutoTokenizer.from_pretrained(base_model, local_files_only=local_only)
     if tok.pad_token_id is None:
         if tok.eos_token is None:
             raise ValueError("tokenizer needs a pad_token or eos_token")
         tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        base_model, torch_dtype=torch.bfloat16, device_map="auto"
+        base_model,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        local_files_only=local_only,
     )
     model.config.pad_token_id = tok.pad_token_id
     lora = LoraConfig(
@@ -553,13 +571,14 @@ def train_qwen_rl(
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    tokenizer = AutoTokenizer.from_pretrained(base_model)
+    local_only = _hf_local_files_only()
+    tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=local_only)
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token is None:
             raise ValueError("tokenizer needs a pad_token or eos_token")
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        base_model, torch_dtype=torch.bfloat16
+        base_model, torch_dtype=torch.bfloat16, local_files_only=local_only
     )
     if init_checkpoint:
         model = PeftModel.from_pretrained(model, init_checkpoint, is_trainable=True)

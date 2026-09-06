@@ -185,13 +185,79 @@ def test_export_sft_pairs_keeps_absent_decisions(tmp_path):
     ]
 
 
-def test_train_qwen_sft_requires_torch():
-    # torch/transformers are not installed offline; the function must fail loudly
+def test_train_qwen_sft_requires_torch(monkeypatch):
+    import builtins
     import pytest
 
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name in ("torch", "transformers", "peft"):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(ImportError):
+        train_qwen_sft(
+            [("prompt", '{"visibility":"global","supersedes":null}')],
+            "/tmp/out",
+            "dummy-model",
+        )
+
+
+def test_train_qwen_sft_disallows_unauthorized_remote_download(monkeypatch):
+    import pytest
+
+    monkeypatch.delenv("MARBLE_ALLOW_HF_DOWNLOAD", raising=False)
     with pytest.raises(Exception):
-        train_qwen_sft([("prompt", '{"visibility":"global","supersedes":null}')],
-                       "/tmp/out", "Qwen/Qwen3-4B-Instruct-2507")
+        train_qwen_sft(
+            [("prompt", '{"visibility":"global","supersedes":null}')],
+            "/tmp/out",
+            "nonexistent-remote-repo/model",
+        )
+
+
+def test_train_qwen_sft_pipeline(monkeypatch, tmp_path):
+    class FakeTokenizer:
+        pad_token_id = 0
+        eos_token = "<eos>"
+        eos_token_id = 1
+
+        def __call__(self, text, add_special_tokens=False):
+            return {"input_ids": [10, 11, 12]}
+
+        def save_pretrained(self, path):
+            pass
+
+    import torch.nn as nn
+
+    class FakeModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(pad_token_id=None)
+
+        def save_pretrained(self, path):
+            pass
+
+    monkeypatch.setattr(
+        "transformers.AutoTokenizer.from_pretrained", lambda *a, **kw: FakeTokenizer()
+    )
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained",
+        lambda *a, **kw: FakeModel(),
+    )
+    monkeypatch.setattr("peft.get_peft_model", lambda model, lora: model)
+    monkeypatch.setattr("transformers.Trainer.train", lambda self: None)
+
+    out_dir = str(tmp_path / "adapter")
+    res = train_qwen_sft(
+        [("prompt", '{"visibility":"global","supersedes":null}')],
+        out_dir,
+        "dummy/model",
+        epochs=1,
+    )
+    assert res == out_dir
+    assert (tmp_path / "adapter" / "adapter_metadata.json").is_file()
 
 
 def test_completion_only_example_masks_prompt_tokens():
