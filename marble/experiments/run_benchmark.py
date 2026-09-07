@@ -45,6 +45,7 @@ from marble.experiments.baselines import (
     canonical_baseline,
 )
 from marble.experiments.ablations import (
+    apply_to_task_config,
     controller_kwargs,
     parse_ablation,
     reward_override,
