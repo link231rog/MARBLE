@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from litellm.types.utils import Message
 from numpy import ndarray
@@ -8,7 +9,24 @@ from marble.memory.long_term_memory import LongTermMemory
 
 class TestLongTermMemory(unittest.TestCase):
     def setUp(self) -> None:
+        self.patcher_embed = patch("marble.memory.long_term_memory.text_embedding")
+        self.mock_embed = self.patcher_embed.start()
+        def _embed(model, input):
+            text = str(input).lower()
+            if "cold" in text or "weather" in text:
+                return [1.0, 0.0]
+            return [0.0, 1.0]
+        self.mock_embed.side_effect = _embed
+
+        self.patcher_model = patch("marble.memory.long_term_memory.model_prompting")
+        self.mock_model = self.patcher_model.start()
+        self.mock_model.return_value = [Message(content="weather summary", role="assistant")]
+
         self.memory = LongTermMemory()
+
+    def tearDown(self) -> None:
+        self.patcher_embed.stop()
+        self.patcher_model.stop()
 
     def test_update(self) -> None:
         result_1 = Message(content="It is cold today.", role="assistant")

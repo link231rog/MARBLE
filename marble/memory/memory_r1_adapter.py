@@ -80,7 +80,6 @@ class MemoryR1Adapter:
                 task_id=card.task_id,
                 title=card.title,
                 visibility="global",
-                owner_id=None,
             )
             for card in self.memory.retrieve(task_id, query=query, top_k=top_k)
         ]

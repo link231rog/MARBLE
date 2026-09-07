@@ -41,6 +41,7 @@ class GMemoryItem:
     step_index: int
     tier: str  # "insight", "query", "interaction"
     active: bool = True
+    visibility: str = "global"
     created_at: int = 0
     updated_at: int = 0
     linked_ids: List[str] = field(default_factory=list)
@@ -152,7 +153,6 @@ class GMemoryAdapter:
                     task_id=it.task_id,
                     title=f"[{it.tier.upper()}] {it.title}",
                     visibility="global",
-                    owner_id=None,
                 )
                 for it in ranked
             ]
@@ -180,6 +180,7 @@ class CollabMemItem:
     access_tier: str  # "private", "group", "public"
     allowed_agents: Set[str]
     active: bool = True
+    visibility: str = "global"
     created_at: int = 0
     updated_at: int = 0
 
@@ -291,8 +292,8 @@ class CollabMemAdapter:
                     memory_id=it.memory_id,
                     task_id=it.task_id,
                     title=f"[{it.access_tier.upper()}] {it.title}",
-                    visibility="global" if it.access_tier == "public" else "private",
-                    owner_id=it.source_agent if it.access_tier != "public" else None,
+                    visibility="global" if it.access_tier == "public" else "targeted",
+                    target_recipients=() if it.access_tier == "public" else tuple(sorted(it.allowed_agents)),
                 )
                 for it in ranked
             ]
@@ -319,6 +320,7 @@ class COPPERItem:
     step_index: int
     is_reflection: bool = False
     active: bool = True
+    visibility: str = "global"
     created_at: int = 0
     updated_at: int = 0
 
@@ -442,7 +444,6 @@ class COPPERAdapter:
                     task_id=it.task_id,
                     title=it.title,
                     visibility="global",
-                    owner_id=None,
                 )
                 for it in ranked
             ]

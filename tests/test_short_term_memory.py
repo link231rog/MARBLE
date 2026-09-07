@@ -6,9 +6,10 @@ from litellm.types.utils import Message
 from marble.memory.short_term_memory import ShortTermMemory
 
 
-class TestLongTermMemory(unittest.TestCase):
+class TestShortTermMemory(unittest.TestCase):
     def setUp(self) -> None:
         self.memory = ShortTermMemory(memory_limit=2)
+        self.memory.summarize = lambda memory: Message(content="summary", role="assistant")
 
     def test_update(self) -> None:
         result_1 = Message(content="It is cold today.", role="assistant")
@@ -19,7 +20,7 @@ class TestLongTermMemory(unittest.TestCase):
         self.memory.update(
             key="key", information={"type": "action_response", "result": result_2}
         )
-        self.assertIsInstance(self.memory.storage, deque)
+        self.assertIsInstance(self.memory.storage, list)
         self.assertIsInstance(self.memory.storage[0], dict)
         self.assertEqual(len(self.memory.storage), 2)
 
@@ -27,7 +28,7 @@ class TestLongTermMemory(unittest.TestCase):
         self.memory.update(
             key="key", information={"type": "action_response", "result": result_3}
         )
-        self.assertIsInstance(self.memory.storage, deque)
+        self.assertIsInstance(self.memory.storage, list)
         self.assertIsInstance(self.memory.storage[0], dict)
         self.assertEqual(len(self.memory.storage), 2)
 

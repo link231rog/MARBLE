@@ -1,3 +1,4 @@
+import os
 import warnings
 from typing import Any, Dict, List, Union
 
@@ -108,8 +109,9 @@ class LongTermMemory(BaseMemory):
         for idx, information in enumerate(memory):
             prompt += f"{idx}. {str(information)}\n"
 
+        worker_model = os.environ.get("MARBLE_WORKER_MODEL", "gpt-3.5-turbo")
         summary = model_prompting(
-            llm_model="gpt-3.5-turbo",
+            llm_model=worker_model,
             messages=[{"role": "system", "content": prompt}],
             return_num=1,
             max_token_num=512,

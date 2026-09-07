@@ -91,9 +91,11 @@ def proposal_rewards(
         proposals_data.append({
             "pid": pid,
             "mid": mid,
+            "author": proposal.get("agent_id"),
             "owner": proposal.get("agent_id"),
             "tokens": tokens,
             "visibility": vis,
+            "target_recipients": target.get("target_recipients", ()),
             "parse_status": ev.get("parse_status", "valid_json"),
         })
 
@@ -127,15 +129,18 @@ def proposal_rewards(
         else:
             cost = p_info["tokens"] / _TOKEN_BUDGET
             was_read = mid in readers
+            # Density penalty only penalizes global memories that contribute to context explosion
+            dp = density_penalty if vis == "global" else 0.0
             if not was_read:
-                credit_val = -lam * cost - density_penalty
+                credit_val = -lam * cost - dp
             else:
-                non_owner = any(r != p_info["owner"] for r in readers[mid])
+                author = p_info.get("author") or p_info.get("owner")
+                non_author = any(r != author for r in readers[mid])
                 if outcome_gated and (not is_success or advantage <= 0):
                     mult = 1.0
                 else:
-                    mult = 1.0 + b * (1 if non_owner else 0)
-                credit_val = advantage * mult - lam * cost - density_penalty
+                    mult = 1.0 + b * (1 if non_author else 0)
+                credit_val = advantage * mult - lam * cost - dp
 
         if pid:
             credits[pid] = credit_val

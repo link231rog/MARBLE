@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 
-Visibility = Literal["private", "global", "absent"]
+Visibility = Literal["absent", "global", "targeted"]
 
 # Fixed initial topic taxonomy (schema-and-reward.md). Soft input only.
 TOPIC_TAXONOMY = (
@@ -38,20 +38,31 @@ class MemoryProposal:
 class MemoryTargetState:
     exists: bool
     visibility: Visibility
-    owner_id: Optional[str] = None
+    target_recipients: tuple = ()  # authorized recipient agent IDs
     supersedes: Optional[str] = None
 
     def __post_init__(self) -> None:
-        if self.visibility not in ("private", "global", "absent"):
-            raise ValueError("visibility must be private, global, or absent")
+        if self.visibility not in ("absent", "global", "targeted"):
+            raise ValueError("visibility must be absent, global, or targeted")
         if self.visibility == "absent" and self.exists:
             raise ValueError("absent target state cannot exist")
         if self.visibility != "absent" and not self.exists:
             raise ValueError("non-absent target state must exist")
-        if self.visibility == "private" and not self.owner_id:
-            raise ValueError("private target state requires owner_id")
-        if self.visibility == "global" and self.owner_id is not None:
-            raise ValueError("global target state cannot have owner_id")
+        if self.visibility == "targeted" and not self.target_recipients:
+            raise ValueError("targeted target state requires target_recipients")
+
+    @classmethod
+    def targeted(
+        cls,
+        recipients: tuple | list,
+        supersedes: Optional[str] = None,
+    ) -> MemoryTargetState:
+        return cls(
+            exists=True,
+            visibility="targeted",
+            target_recipients=tuple(sorted(set(recipients))),
+            supersedes=supersedes,
+        )
 
 
 @dataclass(frozen=True)
@@ -59,8 +70,8 @@ class MemoryCard:
     memory_id: str
     task_id: str
     title: str
-    visibility: Literal["private", "global"]
-    owner_id: Optional[str]
+    visibility: Literal["global", "targeted"] = "global"
+    target_recipients: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -70,8 +81,7 @@ class MemoryItem:
     task_id: str
     title: str
     raw_value: str
-    visibility: Literal["private", "global"]
-    owner_id: Optional[str]
+    visibility: Literal["global", "targeted"]
     source_agent: str
     source: str
     step_index: int
@@ -80,6 +90,7 @@ class MemoryItem:
     created_at: int
     summary: str = ""
     topics: tuple = ()
+    target_recipients: tuple = ()
 
     def card(self) -> MemoryCard:
         return MemoryCard(
@@ -87,5 +98,5 @@ class MemoryItem:
             task_id=self.task_id,
             title=self.title,
             visibility=self.visibility,
-            owner_id=self.owner_id,
+            target_recipients=self.target_recipients,
         )

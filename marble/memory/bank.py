@@ -27,8 +27,6 @@ class MemoryBank:
     ) -> Optional[MemoryItem]:
         if proposal.task_id == "":
             raise ValueError("proposal task_id must not be empty")
-        if target.visibility == "private" and target.owner_id != proposal.agent_id:
-            raise ValueError("private memory owner must equal proposal agent_id")
         if target.supersedes is not None:
             self._validate_supersession(proposal, target.supersedes)
         if not target.exists:
@@ -39,6 +37,7 @@ class MemoryBank:
             memory_id = proposal.proposal_id
             if memory_id in self._items:
                 raise ValueError("proposal_id has already been applied")
+            target_recipients = tuple(getattr(target, "target_recipients", ()))
             item = MemoryItem(
                 memory_id=memory_id,
                 proposal_id=proposal.proposal_id,
@@ -46,7 +45,6 @@ class MemoryBank:
                 title=proposal.title,
                 raw_value=proposal.raw_value,
                 visibility=target.visibility,
-                owner_id=target.owner_id,
                 source_agent=proposal.agent_id,
                 source=proposal.source,
                 step_index=proposal.step_index,
@@ -55,6 +53,7 @@ class MemoryBank:
                 created_at=self._clock,
                 summary=proposal.raw_value[:200],
                 topics=proposal.topics,
+                target_recipients=target_recipients,
             )
             self._items[memory_id] = item
             self._proposal_to_memory[proposal.proposal_id] = memory_id
@@ -67,7 +66,6 @@ class MemoryBank:
                     title=old_item.title,
                     raw_value=old_item.raw_value,
                     visibility=old_item.visibility,
-                    owner_id=old_item.owner_id,
                     source_agent=old_item.source_agent,
                     source=old_item.source,
                     step_index=old_item.step_index,
@@ -76,6 +74,7 @@ class MemoryBank:
                     created_at=old_item.created_at,
                     summary=old_item.summary,
                     topics=old_item.topics,
+                    target_recipients=getattr(old_item, "target_recipients", ()),
                 )
             return item
 
@@ -88,7 +87,7 @@ class MemoryBank:
                 and item.task_id == task_id
                 and (
                     item.visibility == "global"
-                    or item.owner_id == reader_id
+                    or reader_id in getattr(item, "target_recipients", ())
                 )
             ]
 
@@ -97,7 +96,11 @@ class MemoryBank:
             item = self._items[memory_id]
             if not item.active or item.task_id != task_id:
                 raise KeyError(memory_id)
-            if item.visibility == "private" and item.owner_id != reader_id:
+            is_allowed = (
+                item.visibility == "global"
+                or reader_id in getattr(item, "target_recipients", ())
+            )
+            if not is_allowed:
                 raise PermissionError(memory_id)
             return item
 

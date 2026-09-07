@@ -7,8 +7,8 @@ from marble.experiments.run_benchmark import make_memory_runtime
 
 def test_registry_contains_classical_baselines():
     assert "mem0_style" in MAIN_BASELINES
-    assert "amem_style" in MAIN_BASELINES
-    assert "memoryos_style" in MAIN_BASELINES
+    assert "amem_style" not in MAIN_BASELINES
+    assert "memoryos_style" not in MAIN_BASELINES
     assert canonical_baseline("mem0") == "mem0_style"
     assert canonical_baseline("amem") == "amem_style"
     assert canonical_baseline("memoryos") == "memoryos_style"

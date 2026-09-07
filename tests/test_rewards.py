@@ -130,3 +130,50 @@ def test_proposal_rewards_includes_absent_decisions():
     assert "m1" in credits
 
 
+def test_targeted_memory_collaboration_and_density_exemption():
+    """Targeted memory read by non-owner gets collaboration bonus and is exempt from density penalty."""
+    events = [
+        # 15 global cards that exceed the budget of 10
+        *[{
+            "event": "memory_decision",
+            "memory_id": f"g_{i}",
+            "target": {"visibility": "global"},
+            "proposal": {"proposal_id": f"p_g_{i}", "agent_id": "a1", "raw_value": "global data"},
+        } for i in range(15)],
+        # 1 targeted card from a1 targeted to a2
+        {
+            "event": "memory_decision",
+            "memory_id": "m_targeted",
+            "target": {"visibility": "targeted", "target_recipients": ["a2"]},
+            "proposal": {"proposal_id": "p_target", "agent_id": "a1", "raw_value": "targeted diagnostic hint"},
+        },
+        # a2 reads m_targeted
+        {
+            "event": "memory_read",
+            "memory_id": "m_targeted",
+            "reader_id": "a2",
+        },
+    ]
+
+    credits = proposal_rewards(
+        events,
+        task_score=1.0,
+        same_task_baseline=0.0,
+        target_card_budget=10,
+        gamma_density=0.10,
+        task_success=True,
+    )
+
+    cost = token_count("targeted diagnostic hint") / 4096
+    # Advantage = 1.0, mult = 1.0 + 0.25 = 1.25 (since read by non-owner a2)
+    # Density penalty must NOT apply to targeted memory!
+    expected_targeted_credit = 1.0 * 1.25 - 0.05 * cost
+    assert abs(credits["m_targeted"] - expected_targeted_credit) < 1e-9
+
+    # Global cards DO suffer density penalty
+    # density_penalty = 0.10 * (15 - 10) / 10 = 0.05
+    global_cost = token_count("global data") / 4096
+    expected_global_unread = -0.05 * global_cost - 0.05
+    assert abs(credits["g_0"] - expected_global_unread) < 1e-9
+
+

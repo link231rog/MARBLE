@@ -40,6 +40,7 @@ class MemoryR1Item:
     active: bool
     created_at: int
     updated_at: int
+    visibility: str = "global"
 
     def card(self) -> MemoryR1Card:
         return MemoryR1Card(

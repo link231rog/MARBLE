@@ -166,7 +166,6 @@ class Mem0Adapter:
                     task_id=item.task_id,
                     title=item.title,
                     visibility="global",
-                    owner_id=None,
                 )
                 for item in ranked
             ]
@@ -325,7 +324,6 @@ class AMemAdapter:
                     task_id=n.task_id,
                     title=n.title,
                     visibility="global",
-                    owner_id=None,
                 )
                 for n in result_notes[:top_k]
             ]
@@ -480,7 +478,6 @@ class MemoryOSAdapter:
                     task_id=item.task_id,
                     title=item.title,
                     visibility="global",
-                    owner_id=None,
                 )
                 for item in ranked
             ]
