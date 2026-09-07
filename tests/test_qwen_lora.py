@@ -435,6 +435,30 @@ def test_load_qwen_rl_samples_excludes_unavailable_score_trace(tmp_path):
     assert stats["decisions"] == 2
 
 
+def test_load_qwen_rl_samples_undersized_tasks_raises_value_error(tmp_path):
+    import pytest
+
+    trace_dir = tmp_path / "coding" / "0"
+    trace_dir.mkdir(parents=True)
+    trace = trace_dir / "memory_trace.jsonl"
+    trace.write_text(
+        json.dumps({
+            "event": "memory_decision",
+            "memory_id": "m1",
+            "proposal": {"task_id": "task42", "agent_id": "a", "raw_value": "fact"},
+            "target": {"visibility": "global", "supersedes": None},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    (trace_dir / "summary.json").write_text(
+        json.dumps({"benchmark": "coding", "score_status": "available"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"undersized tasks: coding:task42"):
+        load_qwen_rl_samples([str(trace)], [1.0])
+
+
 def test_train_qwen_rl_rejects_empty_replay_before_model_import(tmp_path):
     import pytest
 

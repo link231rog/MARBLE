@@ -377,7 +377,7 @@ def load_qwen_rl_samples(
     if undersized:
         raise ValueError(
             "Qwen RL needs at least two comparable rollouts per task for "
-            f"same-task advantage; undersized tasks: {', '.join(undersized)}"
+            f"same-task advantage; undersized tasks: {', '.join(f'{b}:{t}' for b, t in undersized)}"
         )
 
     group_stats: Dict[Tuple[str, str], Tuple[float, float]] = {}

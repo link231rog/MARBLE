@@ -206,3 +206,23 @@ def test_train_controller_cli_help():
     assert "sft-qwen" not in res.stdout
     assert "rl-qwen" not in res.stdout
 
+
+def test_accuracy_evaluates_correctly_and_queries_policy_once_per_sample():
+    class CountingPolicy:
+        def __init__(self):
+            self.call_count = 0
+
+        def scores(self, feat, proposal=None):
+            self.call_count += 1
+            return {"global": 0.8, "targeted": 0.2, "absent": 0.1}
+
+    policy = CountingPolicy()
+    samples = [
+        {"feat": {"f": 1}, "label": "global", "proposal": {}},
+        {"feat": {"f": 2}, "label": "absent", "proposal": {}},
+    ]
+    acc = accuracy(policy, samples)
+    assert acc == 0.5
+    assert policy.call_count == 2
+
+

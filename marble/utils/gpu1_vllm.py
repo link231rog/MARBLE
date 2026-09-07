@@ -43,10 +43,10 @@ def ensure_ssh_tunnel(remote_host: str = DEFAULT_REMOTE_HOST, tunnel_port: int =
     if check.returncode == 0 and "LISTEN" in check.stdout:
         return True
 
-    logger.info(f"Opening SSH tunnel to {remote_host}: -L 0.0.0.0:{tunnel_port}:localhost:8000")
+    logger.info(f"Opening SSH tunnel to {remote_host}: -L 127.0.0.1:{tunnel_port}:localhost:8000")
     try:
         subprocess.run(
-            ["ssh", "-fNT", "-L", f"0.0.0.0:{tunnel_port}:localhost:8000", remote_host],
+            ["ssh", "-fNT", "-L", f"127.0.0.1:{tunnel_port}:localhost:8000", remote_host],
             check=True,
             timeout=10,
         )

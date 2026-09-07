@@ -12,7 +12,7 @@ case "$ACTION" in
     # Check tunnel
     if ! lsof -i:$TUNNEL_PORT | grep LISTEN > /dev/null; then
       echo "Opening local SSH tunnel to port $TUNNEL_PORT..."
-      ssh -fNT -L 0.0.0.0:$TUNNEL_PORT:localhost:8000 "$REMOTE"
+      ssh -fNT -L 127.0.0.1:$TUNNEL_PORT:localhost:8000 "$REMOTE"
     fi
     echo "Waiting for endpoint http://127.0.0.1:$TUNNEL_PORT/v1/models..."
     for i in $(seq 1 30); do

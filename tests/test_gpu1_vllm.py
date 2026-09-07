@@ -14,6 +14,19 @@ class TestGpu1Vllm(unittest.TestCase):
         # Should not launch another ssh tunnel
         mock_run.assert_called_once()
 
+    @patch("time.sleep")
+    @patch("subprocess.run")
+    def test_ensure_ssh_tunnel_binds_to_loopback(self, mock_run, mock_sleep):
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout=""),
+            MagicMock(returncode=0, stdout=""),
+        ]
+        self.assertTrue(ensure_ssh_tunnel("fake_host", 18000))
+        self.assertEqual(mock_run.call_count, 2)
+        ssh_call_args = mock_run.call_args_list[1][0][0]
+        self.assertIn("127.0.0.1:18000:localhost:8000", ssh_call_args)
+        self.assertNotIn("0.0.0.0:18000:localhost:8000", ssh_call_args)
+
     @patch("marble.utils.gpu1_vllm.stop_gpu1_vllm")
     @patch("marble.utils.gpu1_vllm.start_gpu1_vllm")
     def test_on_demand_context_manager(self, mock_start, mock_stop):
