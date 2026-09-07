@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 from typing import Any, Dict, List, Sequence
@@ -161,25 +162,17 @@ class LocalPolicyController:
 
         recipients: List[tuple[str, ...]] = []
         if known_agents:
-            for aid in known_agents:
-                recipients.append((aid,))
-            if 2 <= len(known_agents) <= 5:
-                import itertools
+            recipients.extend((aid,) for aid in known_agents)
+            if len(known_agents) <= 5:
                 for r in range(2, len(known_agents) + 1):
-                    for combo in itertools.combinations(known_agents, r):
-                        recipients.append(tuple(combo))
-            elif len(known_agents) > 5:
-                import itertools
-                # For larger agent pools (> 5 agents), generate all pairs (size 2) to support targeted collaboration
-                # without exponential 2^N combination explosion.
-                for combo in itertools.combinations(known_agents, 2):
-                    recipients.append(tuple(combo))
-                # Dynamically add any multi-agent subset explicitly mentioned in proposal text
+                    recipients.extend(itertools.combinations(known_agents, r))
+            else:
+                recipients.extend(itertools.combinations(known_agents, 2))
                 if proposal:
                     text = f"{proposal.title or ''} {proposal.raw_value or ''}".lower()
-                    mentioned = [aid for aid in known_agents if aid.lower() in text]
+                    mentioned = tuple(sorted(set(aid for aid in known_agents if aid.lower() in text)))
                     if len(mentioned) >= 2:
-                        recipients.append(tuple(sorted(set(mentioned))))
+                        recipients.append(mentioned)
 
         for k in self.weights:
             if k not in ("absent", "global", "targeted"):

@@ -150,12 +150,10 @@ def accuracy(policy: LocalPolicyController, samples: List[Dict[str, Any]]) -> fl
     if not samples:
         return 0.0
     classes = sorted(set(s["label"] for s in samples) | {"absent", "global", "targeted"})
-    hits = 0
-    for s in samples:
-        scores = policy.scores(s["feat"], s.get("proposal"))
-        pred = max(classes, key=lambda c: scores.get(c, 0.0))
-        if pred == s["label"]:
-            hits += 1
+    hits = sum(
+        1 for s in samples
+        if max(classes, key=lambda c: policy.scores(s["feat"], s.get("proposal")).get(c, 0.0)) == s["label"]
+    )
     return hits / len(samples)
 
 

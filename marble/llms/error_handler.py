@@ -1,12 +1,10 @@
-import math
 import os
+import random
 import time
 from functools import wraps
 
 from beartype.typing import Any, Callable, List, Optional, Set, TypeVar, Union, cast
 from pydantic import BaseModel
-
-INF = float(math.inf)
 
 T = TypeVar("T", bound=Callable[..., Union[Optional[List[Any]], Set[str]]])
 
@@ -89,7 +87,6 @@ def api_calling_error_exponential_backoff(
                         if is_429
                         else modified_base_wait_time
                     )
-                    import random
                     raw_wait = retry_base_wait_time * (2**min(attempts, 6))
                     max_wait = float(os.environ.get("MARBLE_API_MAX_WAIT_TIME", "35.0"))
                     if is_429:

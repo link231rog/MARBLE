@@ -685,19 +685,11 @@ def train_qwen_rl(
             "ref_log_prob": torch.tensor([f["ref_log_prob"] for f in features], dtype=torch.float),
         }
 
-    class _GRPODataset(Dataset):
-        def __init__(self, data: List[Dict[str, Any]]) -> None:
-            self.data = data
-        def __len__(self) -> int:
-            return len(self.data)
-        def __getitem__(self, index: int) -> Dict[str, Any]:
-            return self.data[index]
-
     trainable_parameters = [
         parameter for parameter in model.parameters() if parameter.requires_grad
     ]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=lr)
-    loader = DataLoader(_GRPODataset(examples), batch_size=1, shuffle=True, collate_fn=grpo_collate)
+    loader = DataLoader(examples, batch_size=1, shuffle=True, collate_fn=grpo_collate)
     model.train()
     for _ in range(epochs):
         for batch in loader:

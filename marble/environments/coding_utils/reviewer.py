@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from ruamel.yaml import YAML
 
+from marble.environments.coding_utils.coder import resolve_coding_task
 from marble.llms.model_prompting import model_prompting
 
 
@@ -56,50 +57,12 @@ def give_advice_and_revise_handler(
                 "error-msg": "Solution file is empty or contains invalid code. Please use create_solution first to generate valid code",
             }
 
-        # Dynamically resolve worker model
-        configured_model = None
-        if hasattr(env, "config") and isinstance(env.config, dict):
-            configured_model = env.config.get("llm")
-        if not configured_model:
-            configured_model = os.environ.get("MARBLE_WORKER_MODEL")
-        if not model_name or model_name in ("gpt-3.5-turbo", "default"):
-            model_name = configured_model or "openai/nvidia/nemotron-3-super-120b-a12b"
-
-        full_task_description = None
-        if hasattr(env, "config") and isinstance(env.config, dict):
-            task_node = env.config.get("task")
-            if isinstance(task_node, dict) and "content" in task_node:
-                full_task_description = task_node["content"]
-            elif "task_content" in env.config:
-                full_task_description = env.config["task_content"]
-        if not full_task_description and task_description and task_description.strip():
-            full_task_description = task_description
-
+        model_name, full_task_description, requirements = resolve_coding_task(env, task_description, model_name)
         if not full_task_description:
-            config_path = "marble/configs/coding_config/coding_config.yaml"
-            if not os.path.exists(config_path):
-                return {
-                    "success": False,
-                    "error-msg": f"Config file not found at {config_path}",
-                }
-
-            yaml = YAML()
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = yaml.load(f)
-
-            full_task_description = config["task"]["content"]
-
-        requirements_start = "1. Implementation requirements:\n"
-        requirements_end = "\n\n2. Project structure:"
-        if (
-            requirements_start in full_task_description
-            and requirements_end in full_task_description
-        ):
-            start_idx = full_task_description.find(requirements_start) + len(requirements_start)
-            end_idx = full_task_description.find(requirements_end)
-            requirements = full_task_description[start_idx:end_idx].strip()
-        else:
-            requirements = full_task_description
+            return {
+                "success": False,
+                "error-msg": "Config file not found or task description is empty",
+            }
 
         # Step 1: Generate single most important suggestion
         system_prompt_advice = (
