@@ -45,7 +45,7 @@ class NoSupersede:
         return MemoryTargetState(
             exists=target.exists,
             visibility=target.visibility,
-            owner_id=target.owner_id,
+            target_recipients=getattr(target, "target_recipients", ()),
             supersedes=None,
         )
 
@@ -54,7 +54,7 @@ class NoSupersede:
 
 
 class PrivateToGlobal:
-    """Wraps a controller; forces any private visibility decision to global (spec §12.7.3)."""
+    """Wraps a controller; forces any targeted/private visibility decision to global (spec §12.7.3)."""
 
     def __init__(self, inner):
         self.inner = inner
@@ -62,14 +62,14 @@ class PrivateToGlobal:
     def decide(self, proposal: MemoryProposal, current_state) -> MemoryTargetState:
         target = self.inner.decide(proposal, current_state)
         vis = target.visibility
-        owner_id = target.owner_id
-        if vis == "private":
+        target_recipients = getattr(target, "target_recipients", ())
+        if vis in ("private", "targeted"):
             vis = "global"
-            owner_id = None
+            target_recipients = ()
         return MemoryTargetState(
             exists=target.exists,
             visibility=vis,
-            owner_id=owner_id,
+            target_recipients=target_recipients,
             supersedes=target.supersedes,
         )
 

@@ -110,11 +110,14 @@ def evaluate_memory_trace(
     """Memory metrics from one memory_trace.jsonl (spec §13, §12.7.3)."""
     decisions = [e for e in events if e.get("event") == "memory_decision"]
     r1_operations = [
-        e for e in events if e.get("event") in ("memory_r1_operation", "classical_memory_operation")
+        e for e in events if e.get("event") in (
+            "memory_r1_operation", "classical_memory_operation",
+            "g_memory_operation", "collabmem_operation", "copper_operation"
+        )
     ]
     stored = [e for e in decisions if e.get("memory_id")]
     total = len(stored)
-    by_vis: Dict[str, int] = {"private": 0, "global": 0, "absent": 0}
+    by_vis: Dict[str, int] = {"private": 0, "global": 0, "absent": 0, "targeted": 0}
     owners: Dict[str, str] = {}
     visibilities: Dict[str, str] = {}
     superseded_ids = set()
@@ -138,13 +141,15 @@ def evaluate_memory_trace(
         memory_id = e.get("memory_id")
         if not isinstance(memory_id, str):
             continue
-        if operation in {"ADD", "UPDATE"}:
+        if operation in {"ADD", "UPDATE"} or e.get("event") in {"g_memory_operation", "collabmem_operation", "copper_operation"}:
             proposal = e.get("proposal") or {}
-            if isinstance(proposal.get("agent_id"), str):
-                owners[memory_id] = proposal["agent_id"]
-            visibilities[memory_id] = "global"
+            agent_id = e.get("agent_id") or proposal.get("agent_id")
+            if isinstance(agent_id, str):
+                owners[memory_id] = agent_id
+            vis = str(e.get("access_tier", e.get("tier", "global")))
+            visibilities[memory_id] = vis
             active_items[memory_id] = {
-                "visibility": "global",
+                "visibility": vis,
                 "tokens": token_count(proposal.get("raw_value", "")),
             }
         elif operation == "DELETE":
@@ -165,6 +170,9 @@ def evaluate_memory_trace(
             read_counts[mid] = read_counts.get(mid, 0) + 1
             if owners.get(mid) and owners.get(mid) != e.get("reader_id"):
                 cross_read_counts[mid] = cross_read_counts.get(mid, 0) + 1
+
+    if not total:
+        total = len(owners)
 
     # R16: read coverage (>=1 read) vs repeated reuse (>=2 reads)
     read_coverage = (len([mid for mid in read_counts if mid in owners]) / total) if total else 0.0
@@ -190,18 +198,34 @@ def evaluate_memory_trace(
     active_global = [
         item for item in active_items.values() if item["visibility"] == "global"
     ]
-    active_private = [
-        item for item in active_items.values() if item["visibility"] == "private"
+    active_targeted = [
+        item for item in active_items.values() if item["visibility"] in ("targeted", "private")
     ]
+    active_private = active_targeted
 
-    # Spec §12.7.3: private/global exposure, reads, owner vs non-owner reuse, and negative transfer
-    private_written = by_vis.get("private", 0)
-    private_read = sum(1 for e in reads if visibilities.get(e.get("memory_id")) == "private")
-    private_owner_reuse = sum(
+    # Spec §12.7.3 & Chapter 5: targeted/private exposure, reads, owner vs non-owner reuse, and negative transfer
+    targeted_written = by_vis.get("targeted", 0) + by_vis.get("private", 0)
+    private_written = targeted_written
+
+    targeted_read = sum(
+        1 for e in reads if visibilities.get(e.get("memory_id")) in ("targeted", "private")
+    )
+    private_read = targeted_read
+
+    targeted_owner_reuse = sum(
         1 for e in reads
-        if visibilities.get(e.get("memory_id")) == "private"
+        if visibilities.get(e.get("memory_id")) in ("targeted", "private")
         and owners.get(e.get("memory_id")) == e.get("reader_id")
     )
+    private_owner_reuse = targeted_owner_reuse
+
+    targeted_cross_read = sum(
+        1 for e in reads
+        if visibilities.get(e.get("memory_id")) in ("targeted", "private")
+        and owners.get(e.get("memory_id"))
+        and owners.get(e.get("memory_id")) != e.get("reader_id")
+    )
+
     global_non_owner_reuse = sum(
         1 for e in reads
         if visibilities.get(e.get("memory_id")) == "global"
@@ -235,7 +259,9 @@ def evaluate_memory_trace(
         "stored_rate": stored_rate,
         "valid_absent_rate": valid_absent_rate,
         "format_error_rate": format_error_rate,
-        "private": by_vis.get("private", 0),
+        "private": targeted_written,
+        "targeted": targeted_written,
+        "targeted_written": targeted_written,
         "global": by_vis.get("global", 0),
         "supersessions": len(superseded_ids),
         "r1_adds": sum(1 for e in r1_operations if e.get("operation") == "ADD"),
@@ -257,12 +283,18 @@ def evaluate_memory_trace(
         "active_memory_count": len(active_items),
         "active_global_count": len(active_global),
         "active_private_count": len(active_private),
+        "active_targeted_count": len(active_targeted),
         "active_memory_tokens": sum(item["tokens"] for item in active_items.values()),
         "active_global_tokens": sum(item["tokens"] for item in active_global),
         "active_private_tokens": sum(item["tokens"] for item in active_private),
+        "active_targeted_tokens": sum(item["tokens"] for item in active_targeted),
         "private_written": private_written,
+        "targeted_written": targeted_written,
         "private_read": private_read,
+        "targeted_read": targeted_read,
         "private_owner_reuse": private_owner_reuse,
+        "targeted_owner_reuse": targeted_owner_reuse,
+        "targeted_cross_read": targeted_cross_read,
         "global_non_owner_reuse": global_non_owner_reuse,
         "cross_agent_exposure": cross_agent_exposure,
         "negative_transfer": negative_transfer,
@@ -309,9 +341,14 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         "retrieval": summary.get("retrieval", {}),
         "reward_config": summary.get("reward_config", {}),
         "active_memory_count": memory_metrics.get("active_memory_count", 0),
+        "active_targeted_count": memory_metrics.get("active_targeted_count", 0),
         "private_written": memory_metrics.get("private_written", 0),
+        "targeted_written": memory_metrics.get("targeted_written", 0),
         "private_read": memory_metrics.get("private_read", 0),
+        "targeted_read": memory_metrics.get("targeted_read", 0),
         "private_owner_reuse": memory_metrics.get("private_owner_reuse", 0),
+        "targeted_owner_reuse": memory_metrics.get("targeted_owner_reuse", 0),
+        "targeted_cross_read": memory_metrics.get("targeted_cross_read", 0),
         "global_non_owner_reuse": memory_metrics.get("global_non_owner_reuse", 0),
         "cross_agent_exposure": memory_metrics.get("cross_agent_exposure", 0),
         "cross_agent_reads": memory_metrics.get("cross_agent_reads", 0),

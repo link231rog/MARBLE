@@ -27,7 +27,7 @@ def _decision(pid, title, value, visibility):
                      "source": "worker", "title": title, "raw_value": value,
                      "step_index": 1},
         "target": {"exists": visibility != "absent", "visibility": visibility,
-                   "owner_id": None, "supersedes": None},
+                   "supersedes": None},
     }
 
 
@@ -54,7 +54,7 @@ def test_load_samples_preserves_absent_without_memory_id(tmp_path):
                 "source": "worker", "title": "scratch note", "raw_value": "x",
                 "step_index": 1,
             },
-            "target": {"exists": False, "visibility": "absent", "owner_id": None, "supersedes": None},
+            "target": {"exists": False, "visibility": "absent", "supersedes": None},
         }
         fh.write(json.dumps(absent_ev) + "\n")
     samples = load_samples([trace_file])
@@ -148,3 +148,61 @@ def test_manifest_keeps_direct_trace_compatibility(tmp_path):
     assert discover_sft_traces([trace], manifest=str(manifest), split="train") == [
         os.path.abspath(trace)
     ]
+
+
+def test_load_samples_and_train_multi_agent_recipients(tmp_path):
+    rows = []
+    # Mix of global, absent, and multi-agent targeted decisions
+    for i in range(10):
+        rows.append({
+            "event": "memory_decision",
+            "memory_id": f"m_pair_{i}",
+            "proposal": {"proposal_id": f"p{i}", "task_id": "t", "agent_id": "agent_1",
+                         "source": "worker", "title": f"pair sync {i}", "raw_value": "state",
+                         "step_index": 1},
+            "target": {"exists": True, "visibility": ["agent_1", "agent_2"], "supersedes": None},
+        })
+        rows.append({
+            "event": "memory_decision",
+            "memory_id": f"m_single_{i}",
+            "proposal": {"proposal_id": f"s{i}", "task_id": "t", "agent_id": "agent_2",
+                         "source": "worker", "title": f"internal note {i}", "raw_value": "draft",
+                         "step_index": 1},
+            "target": {"exists": True, "visibility": "targeted", "target_recipients": ["agent_2"], "supersedes": None},
+        })
+        rows.append(_decision(f"g{i}", f"shared plan {i}", "all agree", "global"))
+        rows.append(_decision(f"a{i}", f"empty {i}", "", "absent"))
+
+    trace = _trace(tmp_path, "multi_trace.jsonl", rows)
+    samples = load_samples([trace])
+    assert len(samples) == 40
+    labels = {s["label"] for s in samples}
+    assert '["agent_1", "agent_2"]' in labels
+    assert '["agent_2"]' in labels
+    assert "global" in labels
+    assert "absent" in labels
+
+    out = str(tmp_path / "multi_policy.json")
+    stats = train([trace], out, epochs=30)
+    assert stats["accuracy_after"] >= 0.9
+    assert os.path.exists(out)
+
+
+def test_train_controller_cli_help():
+    import subprocess
+    import sys
+
+    res = subprocess.run(
+        [sys.executable, "-m", "marble.experiments.train_controller", "--help"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "linear_sft" in res.stdout
+    assert "linear_rl" in res.stdout
+    assert "qwen_sft" in res.stdout
+    assert "qwen_rl" in res.stdout
+    assert "GRPO" in res.stdout
+    assert "sft-qwen" not in res.stdout
+    assert "rl-qwen" not in res.stdout
+

@@ -34,8 +34,6 @@ MAIN_BASELINES: Tuple[str, ...] = (
     "global_add_all",
     "lts_style",
     "mem0_style",
-    "amem_style",
-    "memoryos_style",
     "memory_r1_style",
     "g_memory_style",
     "collabmem_style",
@@ -138,6 +136,10 @@ ALIASES = {
     "qwen_sft": "ours_sft",
     "qwen_rl": "ours_rl",
     "ours-private-to-global": "ours_private_to_global",
+    "local_policy": "learned_controller",
+    "linear_policy": "learned_controller",
+    "ours_linear_sft": "learned_controller",
+    "ours_linear_rl": "learned_controller",
 }
 
 

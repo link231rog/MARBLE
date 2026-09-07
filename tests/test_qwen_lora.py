@@ -84,7 +84,8 @@ def test_api_generate_fn_passes_timeout(monkeypatch):
 def test_factory_applies_schema_drop_kwargs_to_runtime_prompt():
     prompts = []
     ctrl = make_qwen_lora_controller(
-        lambda prompt: prompts.append(prompt) or '{"visibility": "private", "supersedes": null}',
+        lambda prompt: prompts.append(prompt) or '{"visibility": ["a1"], "supersedes": null}',
+        agent_role_map={"a1": "developer"},
         **controller_kwargs("schema_field", "title"),
     )
 
@@ -103,10 +104,10 @@ def test_factory_applies_schema_drop_kwargs_to_runtime_prompt():
 
     assert "title: hidden title" not in prompts[0]
     assert json.loads(ctrl.last_raw) == {
-        "visibility": "private",
+        "visibility": ["a1"],
         "supersedes": None,
     }
-    assert out.visibility == "private" and out.supersedes is None
+    assert out.visibility == "targeted" and out.target_recipients == ("a1",) and out.supersedes is None
 
 
 def test_factory_applies_input_drop_kwargs_to_runtime_prompt():
@@ -343,10 +344,16 @@ def test_load_qwen_rl_samples_uses_same_task_memory_credit(tmp_path):
         "prompt": "first prompt",
         "completion": '{"visibility":"global","supersedes":null}',
         "advantage": 1.25 - 0.05 / 4096,
+        "task_advantage": 1.0,
+        "benchmark": "",
+        "task_id": "same",
     }, {
         "prompt": "second rollout",
         "completion": '{"visibility":"global","supersedes":null}',
         "advantage": -0.05 / 4096,
+        "task_advantage": -1.0,
+        "benchmark": "",
+        "task_id": "same",
     }]
     assert stats["decisions"] == 3
     assert stats["skipped_no_credit"] == 1
@@ -390,7 +397,8 @@ def test_load_qwen_rl_samples_keeps_same_task_id_per_benchmark(tmp_path):
     samples, _ = load_qwen_rl_samples(traces, rewards)
 
     assert samples[0]["advantage"] == 1.25 - 0.05 / 4096
-    assert samples[2]["advantage"] == 6.25 - 0.05 / 4096
+    # Chapter 4 §5.1: std normalization achieves scale invariance across tasks
+    assert samples[2]["advantage"] == 1.25 - 0.05 / 4096
 
 
 def test_load_qwen_rl_samples_excludes_unavailable_score_trace(tmp_path):
@@ -489,4 +497,81 @@ def test_audit_sft_distribution():
     assert report["counts"]["absent"] == 1
     assert report["counts"]["invalid"] == 1
     assert report["proportions"]["global"] == 0.4
+
+
+def test_train_qwen_rl_trajectory_grpo_pipeline(monkeypatch, tmp_path):
+    pytest = pytest_module = __import__("pytest")
+    torch = pytest.importorskip("torch")
+    import torch.nn as nn
+    from types import SimpleNamespace
+
+    class FakeTokenizer:
+        pad_token_id = 0
+        eos_token = "<eos>"
+        eos_token_id = 1
+
+        def __call__(self, text, add_special_tokens=False):
+            return {"input_ids": [10, 11, 12]}
+
+        def save_pretrained(self, path):
+            pass
+
+    class FakeModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = SimpleNamespace(pad_token_id=None)
+            self.dummy_param = nn.Parameter(torch.zeros(2, requires_grad=True))
+
+        def save_pretrained(self, path):
+            pass
+
+        def forward(self, *a, **kw):
+            in_ids = kw.get("input_ids")
+            if in_ids is None and a:
+                in_ids = a[0]
+            seq_len = in_ids.shape[1] if in_ids is not None else 7
+            return SimpleNamespace(
+                logits=torch.zeros((1, seq_len, 20), requires_grad=True)
+            )
+
+    monkeypatch.setattr(
+        "transformers.AutoTokenizer.from_pretrained", lambda *a, **kw: FakeTokenizer()
+    )
+    monkeypatch.setattr(
+        "transformers.AutoModelForCausalLM.from_pretrained",
+        lambda *a, **kw: FakeModel(),
+    )
+    monkeypatch.setattr("peft.get_peft_model", lambda model, lora: model)
+
+    trace1 = tmp_path / "t1.jsonl"
+    trace2 = tmp_path / "t2.jsonl"
+    for p, tid, mem in ((trace1, "same", "m1"), (trace2, "same", "m2")):
+        p.write_text(
+            json.dumps({
+                "event": "memory_decision",
+                "memory_id": mem,
+                "controller_prompt": "test prompt",
+                "controller_output": '{"visibility":"global","supersedes":null}',
+                "proposal": {"task_id": tid, "agent_id": "a", "raw_value": "val"},
+                "target": {"visibility": "global", "supersedes": None},
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+    out_dir = str(tmp_path / "grpo_adapter")
+    res = train_qwen_rl(
+        [str(trace1), str(trace2)],
+        out_dir,
+        "dummy/model",
+        rewards=[1.0, 0.0],
+        epochs=1,
+    )
+    assert res == out_dir
+    meta_path = tmp_path / "grpo_adapter" / "adapter_metadata.json"
+    assert meta_path.is_file()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["training_method"] == "trajectory_grpo"
+    assert meta["group_size"] == 4
+    assert meta["kl_anchor"] is True
+    assert meta["epochs"] == 1
 

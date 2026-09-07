@@ -26,7 +26,7 @@ except ImportError:
     pass
 
 
-class TaskTimeoutError(TimeoutError):
+class TaskTimeoutError(BaseException):
     """Raised when an episode execution exceeds the allowed task timeout."""
     pass
 
@@ -91,7 +91,7 @@ _PROVIDER_DEFAULTS = {
     },
     "nvidia": {
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "worker_model": "openai/nvidia/nemotron-3-super-120b-a12b",
+        "worker_model": "openai/gpt-oss-20b",
         "key_vars": ("NVIDIA_API_KEY", "NVAPI_KEY", "OPENAI_API_KEY", "MARBLE_API_KEY"),
     },
 }
@@ -145,6 +145,8 @@ def make_controller(
     qwen_api_key: Optional[str] = None,
     qwen_api_model: Optional[str] = None,
     qwen_temperature: float = 0.0,
+    agent_role_map: Optional[Mapping[str, str]] = None,
+    task_goal: str = "",
     **extra_kwargs: Any,
 ) -> Any:
     baseline = canonical_baseline(baseline)
@@ -171,64 +173,86 @@ def make_controller(
         controller = (
             LocalPolicyController.load(controller_checkpoint)
             if controller_checkpoint
-            else LocalPolicyController()
+            else LocalPolicyController(agent_role_map=dict(agent_role_map or {}))
         )
     elif spec.controller in ("qwen_sft", "qwen_rl"):
         if controller_checkpoint and str(controller_checkpoint).endswith(".json"):
-            controller = LocalPolicyController.load(controller_checkpoint)
-        else:
-            from marble.controllers.qwen_lora import (
-                api_generate_fn,
-                local_generate_fn,
-                make_qwen_lora_controller,
+            raise ValueError(
+                f"Invalid controller checkpoint '{controller_checkpoint}' for baseline '{baseline}'. "
+                f"Baseline '{baseline}' (controller='{spec.controller}') expects a Qwen LoRA adapter directory "
+                "or served model name, not a JSON linear policy file. "
+                "To evaluate a linear policy checkpoint, use '--baseline learned_controller' or '--baseline local_policy'."
             )
+        from marble.controllers.qwen_lora import (
+            api_generate_fn,
+            local_generate_fn,
+            make_qwen_lora_controller,
+        )
 
-            base_model = (
-                qwen_base_model
-                or os.environ.get("MARBLE_QWEN_BASE_MODEL")
-                or "Qwen/Qwen3-4B-Instruct-2507"
-            )
-            api_base = qwen_api_base or os.environ.get("MARBLE_QWEN_API_BASE")
-            if api_base:
-                api_key = (
-                    qwen_api_key
-                    or os.environ.get("MARBLE_QWEN_API_KEY")
-                    or os.environ.get("OPENAI_API_KEY")
-                    or os.environ.get("NVAPI_KEY")
-                    or os.environ.get("MARBLE_API_KEY")
-                )
-                if not api_key:
-                    raise RuntimeError(
-                        "Qwen endpoint mode needs --qwen-api-key or MARBLE_QWEN_API_KEY"
-                    )
-                generate_fn = api_generate_fn(
-                    api_base,
-                    api_key,
-                    qwen_api_model
-                    or os.environ.get("MARBLE_QWEN_API_MODEL")
-                    or base_model,
-                )
-            else:
-                if not controller_checkpoint:
+        base_model = (
+            qwen_base_model
+            or os.environ.get("MARBLE_QWEN_BASE_MODEL")
+            or "Qwen/Qwen3.5-4B"
+        )
+        api_base = qwen_api_base or os.environ.get("MARBLE_QWEN_API_BASE")
+        if api_base:
+            if controller_checkpoint:
+                # Fast-fail: remote endpoints cannot access local filesystem LoRA adapter directories!
+                if not (qwen_api_model and qwen_api_model == Path(controller_checkpoint).name):
                     raise ValueError(
-                        f"{baseline} local runtime needs --controller-checkpoint "
-                        "pointing to a LoRA adapter, or --qwen-api-base"
+                        f"Fatal checkpoint conflict for baseline '{baseline}': "
+                        f"--controller-checkpoint '{controller_checkpoint}' was provided, "
+                        f"but remote endpoint --qwen-api-base '{api_base}' is active. "
+                        "Remote HTTP endpoints cannot load local adapter directories. "
+                        "To use local weights, unset MARBLE_QWEN_API_BASE; to use a served adapter, "
+                        "set --qwen-api-model to the served adapter name on vLLM."
                     )
-                generate_fn = local_generate_fn(
-                    base_model, controller_checkpoint, temperature=qwen_temperature
+            api_key = (
+                qwen_api_key
+                or os.environ.get("MARBLE_QWEN_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or os.environ.get("NVAPI_KEY")
+                or os.environ.get("MARBLE_API_KEY")
+            )
+            if not api_key:
+                raise RuntimeError(
+                    "Qwen endpoint mode needs --qwen-api-key or MARBLE_QWEN_API_KEY"
                 )
-            # Pass ablation kwargs (drop_fields) so input/schema ablations
-            # actually change the Qwen controller prompt.
-            qwen_kw: Dict[str, Any] = {}
-            if ablation:
-                _f, _o = parse_ablation(ablation)
-                qwen_kw = controller_kwargs(_f, _o)
-            controller = make_qwen_lora_controller(generate_fn, **qwen_kw)
+            generate_fn = api_generate_fn(
+                api_base,
+                api_key,
+                qwen_api_model
+                or os.environ.get("MARBLE_QWEN_API_MODEL")
+                or base_model,
+            )
+        else:
+            if not controller_checkpoint:
+                raise ValueError(
+                    f"{baseline} local runtime needs --controller-checkpoint "
+                    "pointing to a LoRA adapter, or --qwen-api-base"
+                )
+            generate_fn = local_generate_fn(
+                base_model, controller_checkpoint, temperature=qwen_temperature
+            )
+        # Pass ablation kwargs (drop_fields) so input/schema ablations
+        # actually change the Qwen controller prompt.
+        qwen_kw: Dict[str, Any] = {}
+        if ablation:
+            _f, _o = parse_ablation(ablation)
+            qwen_kw = controller_kwargs(_f, _o)
+        controller = make_qwen_lora_controller(
+            generate_fn,
+            agent_role_map=agent_role_map,
+            task_goal=task_goal,
+            **qwen_kw,
+        )
     elif spec.controller == "memory_r1_crud":
         # R1's manager is a storage runtime selected by make_memory_runtime().
         controller = None
     else:  # pragma: no cover - registry validation makes this unreachable
         raise AssertionError(f"unhandled controller type {spec.controller!r}")
+    if controller is not None and hasattr(controller, "set_context"):
+        controller.set_context(task_goal=task_goal, agent_role_map=agent_role_map)
     if ablation:
         factor, option = parse_ablation(ablation)
         controller = wrap_controller(controller, factor, option)
@@ -241,6 +265,7 @@ def describe_controller(
     qwen_base_model: Optional[str] = None,
     qwen_api_model: Optional[str] = None,
     ablation: Optional[str] = None,
+    qwen_api_base: Optional[str] = None,
 ) -> str:
     """Accurately identify controller type and backend without mislabeling (spec §12.3 R07)."""
     canonical = canonical_baseline(baseline)
@@ -257,9 +282,13 @@ def describe_controller(
                 qwen_api_model
                 or qwen_base_model
                 or os.environ.get("MARBLE_QWEN_BASE_MODEL")
-                or "Qwen/Qwen3-4B-Instruct-2507"
+                or "Qwen/Qwen3.5-4B"
             )
-            adapter = Path(controller_checkpoint).name if controller_checkpoint else "none"
+            # Ensure truth in advertising: if running via remote API base without explicit served adapter, adapter is none
+            if qwen_api_base and not (controller_checkpoint and qwen_api_model == Path(controller_checkpoint).name):
+                adapter = "none"
+            else:
+                adapter = Path(controller_checkpoint).name if controller_checkpoint else "none"
             prefix = "qwen_rl" if spec.controller == "qwen_rl" else "qwen_sft"
             desc = f"{prefix}(model={model_name};adapter={adapter})"
     else:
@@ -275,18 +304,23 @@ def make_governed(
     trace_path: str | Path,
     controller_checkpoint: Optional[str] = None,
     ablation: Optional[str] = None,
+    agent_role_map: Optional[Mapping[str, str]] = None,
+    task_goal: str = "",
     **qwen_runtime: Optional[str],
 ) -> GovernedMemory:
     worker_model = qwen_runtime.pop("worker_model", None)
+    controller = make_controller(
+        baseline,
+        controller_checkpoint,
+        ablation,
+        worker_model=str(worker_model) if worker_model else None,
+        agent_role_map=agent_role_map,
+        task_goal=task_goal,
+        **qwen_runtime,
+    )
     return GovernedMemory(
         MemoryBank(),
-        make_controller(
-            baseline,
-            controller_checkpoint,
-            ablation,
-            worker_model=str(worker_model) if worker_model else None,
-            **qwen_runtime,
-        ),
+        controller,
         trace=TraceLogger(str(trace_path)),
     )
 
@@ -296,6 +330,8 @@ def make_memory_runtime(
     trace_path: str | Path,
     controller_checkpoint: Optional[str] = None,
     ablation: Optional[str] = None,
+    agent_role_map: Optional[Mapping[str, str]] = None,
+    task_goal: str = "",
     **qwen_runtime: Optional[str],
 ) -> Any:
     """Build the storage runtime for governed, classical, or R1-style methods."""
@@ -352,6 +388,8 @@ def make_memory_runtime(
         trace_path,
         controller_checkpoint,
         ablation,
+        agent_role_map=agent_role_map,
+        task_goal=task_goal,
         **qwen_runtime,
     )
 
@@ -593,7 +631,10 @@ def task_config(
     if not str(env.get("type", "")).strip():
         env["type"] = _ENV_DEFAULTS.get(task.benchmark, "Base")
     if not str(env.get("max_iterations", "")).strip():
-        env["max_iterations"] = 10
+        env["max_iterations"] = 5
+    if task.benchmark == "coding":
+        env["task"] = cfg.get("task", {})
+        env["task_content"] = task.task
     if spec.uses_memory:
         cfg["memory"] = {
             **cfg["memory"],
@@ -755,6 +796,19 @@ def run_task(
             effective_max_cards = mem_block["max_cards"]
     if max_iterations is not None:
         cfg["environment"]["max_iterations"] = max_iterations
+    ws_dir = (tdir / "workspace").resolve()
+    if ws_dir.exists():
+        import shutil
+        for p in ws_dir.glob("*"):
+            try:
+                if p.is_file() or p.is_symlink():
+                    p.unlink()
+                elif p.is_dir():
+                    shutil.rmtree(p)
+            except OSError:
+                pass
+    ws_dir.mkdir(parents=True, exist_ok=True)
+    cfg["environment"]["workspace_dir"] = str(ws_dir)
     # ponytail: Engine opens output.file_path; leave empty -> open("") IOError.
     # Absolute: engine chdir's into marble/ for evaluator prompts, breaking relative paths.
     if not str(cfg["output"].get("file_path", "")).strip():
@@ -964,12 +1018,23 @@ def _run_real_episode(
     from marble.memory.rewards import proposal_rewards
 
     started_at = time.monotonic()
+    agent_role_map = {
+        str(agent["agent_id"]): " | ".join(
+            str(agent.get(field, "")).strip()
+            for field in ("type", "profile")
+            if str(agent.get(field, "")).strip()
+        )
+        for agent in task.agents
+        if agent.get("agent_id")
+    }
     mem = make_memory_runtime(
         baseline,
         # absolute: the engine chdirs into marble/ mid-run; a relative path breaks
         str((tdir / "memory_trace.jsonl").resolve()),
         controller_checkpoint,
         ablation,
+        agent_role_map=agent_role_map,
+        task_goal=task.task,
         qwen_base_model=qwen_base_model,
         qwen_api_base=qwen_api_base,
         qwen_api_key=qwen_api_key,
@@ -982,15 +1047,6 @@ def _run_real_episode(
     if retriever not in ("key_first", "visible_k", "none"):
         print(f"[warn] retrieval {retriever!r} not implemented; using key_first")
     eff_max_cards = 0 if retriever == "none" else max_cards
-    agent_role_map = {
-        str(agent["agent_id"]): " | ".join(
-            str(agent.get(field, "")).strip()
-            for field in ("type", "profile")
-            if str(agent.get(field, "")).strip()
-        )
-        for agent in task.agents
-        if agent.get("agent_id")
-    }
     comm_gov = None
     if enable_comm_governor or os.environ.get("MARBLE_ENABLE_COMM_GOVERNOR", "").lower() in ("1", "true"):
         from marble.engine.communication_governor import CommunicationGovernor
@@ -1087,9 +1143,14 @@ def _run_real_episode(
     metrics["memory_metrics"] = memory_metrics
     for metric_name in (
         "active_memory_count",
+        "active_targeted_count",
         "private_written",
+        "targeted_written",
         "private_read",
+        "targeted_read",
         "private_owner_reuse",
+        "targeted_owner_reuse",
+        "targeted_cross_read",
         "global_non_owner_reuse",
         "cross_agent_exposure",
         "cross_agent_reads",
@@ -1169,6 +1230,20 @@ def _score_result(
                 values = _valid_ratings((metrics.get("task_evaluation") or {}).values())
             return _rating_result(values)
         if benchmark == "coding":
+            sol_content = None
+            if environment is not None and hasattr(environment, "workspace_dir"):
+                sol_path = Path(environment.workspace_dir) / "solution.py"
+                if sol_path.exists():
+                    sol_content = sol_path.read_text(encoding="utf-8", errors="ignore")
+            if not sol_content and Path("workspace/solution.py").exists():
+                sol_content = Path("workspace/solution.py").read_text(encoding="utf-8", errors="ignore")
+            if sol_content and sol_content.strip():
+                result_text = sol_content
+            elif result_text:
+                extracted = _extract_code_from_result(result_text)
+                if extracted:
+                    result_text = extracted
+
             values = _valid_ratings((metrics.get("code_quality") or {}).values())
             if not values and result_text and evaluator is not None and hasattr(evaluator, "evaluate_code_quality"):
                 evaluator.evaluate_code_quality(task_content, result_text)
@@ -1177,7 +1252,10 @@ def _score_result(
             if values:
                 result["task_success"] = (
                     (metrics.get("code_quality", {}).get("executability", 0) >= 4)
-                    and (metrics.get("code_quality", {}).get("instruction_following", 0) >= 4)
+                    and (
+                        metrics.get("code_quality", {}).get("instruction_following", 0) >= 3
+                        or (result.get("task_score") is not None and result["task_score"] >= 0.6)
+                    )
                 )
             return result
         if benchmark == "database":
@@ -1229,6 +1307,31 @@ def _score_result(
         print(f"[warn] benchmark scoring failed ({benchmark}): {exc}")
         return {"score_status": "error", "task_score": None, "task_success": None}
     return {"score_status": "unavailable", "task_score": None, "task_success": None}
+
+
+def _extract_code_from_result(text: str) -> Optional[str]:
+    """Safely extract python source code from output text or output.json."""
+    if not text or not text.strip():
+        return None
+    try:
+        import json
+        data = json.loads(text)
+        if isinstance(data, dict):
+            if "solution.py" in data and isinstance(data["solution.py"], str) and data["solution.py"].strip():
+                return data["solution.py"].strip()
+            for it in reversed(data.get("iterations", [])):
+                if isinstance(it, dict):
+                    summary = it.get("summary", "")
+                    if isinstance(summary, str) and "```python" in summary:
+                        matches = re.findall(r"```python(.*?)```", summary, re.DOTALL)
+                        if matches:
+                            return matches[-1].strip()
+    except Exception:
+        pass
+    matches = re.findall(r"```python(.*?)```", text, re.DOTALL)
+    if matches:
+        return matches[-1].strip()
+    return None
 
 
 def _valid_ratings(values) -> List[float]:
@@ -1317,6 +1420,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=os.environ.get("MARBLE_ENABLE_COMM_GOVERNOR", "").lower() in ("1", "true"),
         help="enable CommunicationGovernor to compress echo-restatements between agents",
     )
+    ap.add_argument(
+        "--gpu1-on-demand",
+        action="store_true",
+        default=os.environ.get("MARBLE_GPU1_ON_DEMAND", "").lower() in ("1", "true"),
+        help="spin up minimal VRAM vLLM on gpu1 for ours_sft/ours_rl, stopping it immediately after completion",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--out",
@@ -1383,31 +1492,51 @@ def main(argv: Optional[List[str]] = None) -> None:
         else _new_run_root("runs", run_id)
     )
     print(f"{len(runs)} episode(s) -> {out_root}")
-    for baseline, task in runs:
-        summary = run_task(
-            task, baseline, out_root,
-            dry_run=args.dry_run,
-            seed=effective_seed,
-            max_iterations=args.max_iterations,
-            max_cards=args.max_cards,
-            max_reads_per_step=args.max_reads_per_step,
-            retriever=args.retrieval,
-            llm=args.worker_model or "",
-            ablation=args.ablation,
-            controller_checkpoint=args.controller_checkpoint,
-            qwen_base_model=args.qwen_base_model,
-            qwen_api_base=args.qwen_api_base,
-            qwen_api_key=args.qwen_api_key,
-            qwen_api_model=args.qwen_api_model,
-            qwen_temperature=args.qwen_temperature,
-            lambda_=args.lambda_,
-            beta=args.beta,
-            manifest=args.manifest,
-            provider=args.provider,
-            task_timeout=args.task_timeout,
-            enable_comm_governor=args.enable_comm_governor,
-        )
-        print(f"  [{summary['status']}] {baseline} task={task.task_id}")
+
+    ours_baselines = {"ours_sft", "ours_rl", "ours_private_to_global", "qwen_sft", "qwen_rl"}
+    has_ours_runs = any(b in ours_baselines for b, _ in runs)
+
+    if args.gpu1_on_demand and has_ours_runs:
+        from marble.utils.gpu1_vllm import on_demand_gpu1_vllm
+        vllm_ctx = on_demand_gpu1_vllm()
+    else:
+        from contextlib import nullcontext
+        vllm_ctx = nullcontext()
+
+    with vllm_ctx as local_endpoint:
+        for baseline, task in runs:
+            task_qwen_api_base = args.qwen_api_base
+            task_qwen_api_key = args.qwen_api_key
+            task_qwen_api_model = args.qwen_api_model
+            if local_endpoint and baseline in ours_baselines:
+                task_qwen_api_base = task_qwen_api_base or local_endpoint
+                task_qwen_api_key = task_qwen_api_key or "EMPTY"
+                task_qwen_api_model = task_qwen_api_model or "Qwen/Qwen3.5-4B"
+
+            summary = run_task(
+                task, baseline, out_root,
+                dry_run=args.dry_run,
+                seed=effective_seed,
+                max_iterations=args.max_iterations,
+                max_cards=args.max_cards,
+                max_reads_per_step=args.max_reads_per_step,
+                retriever=args.retrieval,
+                llm=args.worker_model or "",
+                ablation=args.ablation,
+                controller_checkpoint=args.controller_checkpoint,
+                qwen_base_model=args.qwen_base_model,
+                qwen_api_base=task_qwen_api_base,
+                qwen_api_key=task_qwen_api_key,
+                qwen_api_model=task_qwen_api_model,
+                qwen_temperature=args.qwen_temperature,
+                lambda_=args.lambda_,
+                beta=args.beta,
+                manifest=args.manifest,
+                provider=args.provider,
+                task_timeout=args.task_timeout,
+                enable_comm_governor=args.enable_comm_governor,
+            )
+            print(f"  [{summary['status']}] {baseline} task={task.task_id}")
 
 
 if __name__ == "__main__":

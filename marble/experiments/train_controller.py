@@ -8,8 +8,13 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from marble.controllers import LocalPolicyController, features
-from marble.controllers.local_policy import VISIBILITIES
+from marble.controllers.local_policy import (
+    VISIBILITIES,
+    LocalPolicyController,
+    canonical_action,
+    features,
+    serialize_action,
+)
 from marble.experiments.baselines import canonical_baseline
 from marble.experiments.task_manifest import read_manifest
 from marble.memory.schema import MemoryProposal
@@ -19,7 +24,7 @@ def _in_split(task_id: Any, split: str) -> bool:
     if split == "all":
         return True
     bucket = int(hashlib.sha256(str(task_id).encode()).hexdigest(), 16) % 10
-    return (bucket < 8) == (split == "train")
+    return (bucket < 8) == (split in ("train", "train_hard"))
 
 
 def _canonical_or_raw(name: Any) -> str:
@@ -78,8 +83,8 @@ def discover_sft_traces(
     manifest: Optional[str] = None,
 ) -> List[str]:
     """Resolve direct traces and benchmark manifests into usable SFT traces."""
-    if split not in ("all", "train", "test"):
-        raise ValueError("split must be one of: all, train, test")
+    if split not in ("all", "train", "test", "train_hard", "test_hard"):
+        raise ValueError("split must be one of: all, train, test, train_hard, test_hard")
     canonical = canonical_baseline(baseline) if baseline else None
     allowed_keys = _manifest_keys(Path(manifest), split) if manifest else None
     traces = set()
@@ -113,24 +118,30 @@ def load_samples(trace_paths: List[str]) -> List[Dict[str, Any]]:
     for path in trace_paths:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
                 ev = json.loads(line)
                 if ev.get("event") != "memory_decision" or not ev.get("proposal"):
                     continue
                 target = ev.get("target") or {}
                 vis = target.get("visibility")
-                if vis not in VISIBILITIES:
-                    continue
+                recipients = target.get("target_recipients") or ()
+                act = canonical_action(vis, recipients)
+                if not target.get("exists", True) and act != "absent":
+                    act = "absent"
+                label = serialize_action(act)
                 p = ev["proposal"]
                 proposal = MemoryProposal(
                     proposal_id=p["proposal_id"], task_id=p["task_id"],
                     agent_id=p["agent_id"], source=p.get("source", "worker"),
-                    title=p["title"], raw_value=p["raw_value"],
+                    title=p.get("title") or "", raw_value=p.get("raw_value") or "",
                     step_index=p.get("step_index", 0),
                 )
-                # ponytail: supersedes context not replayed here; add when traces store state snapshots
                 samples.append({
                     "feat": features(proposal, []),
-                    "label": vis,
+                    "label": label,
+                    "proposal": proposal,
                 })
     return samples
 
@@ -138,22 +149,34 @@ def load_samples(trace_paths: List[str]) -> List[Dict[str, Any]]:
 def accuracy(policy: LocalPolicyController, samples: List[Dict[str, Any]]) -> float:
     if not samples:
         return 0.0
-    hits = sum(
-        max(VISIBILITIES,
-            key=lambda v: policy.scores(s["feat"])[v]) == s["label"]
-        for s in samples
-    )
+    classes = sorted(set(s["label"] for s in samples) | {"absent", "global", "targeted"})
+    hits = 0
+    for s in samples:
+        scores = policy.scores(s["feat"], s.get("proposal"))
+        pred = max(classes, key=lambda c: scores.get(c, 0.0))
+        if pred == s["label"]:
+            hits += 1
     return hits / len(samples)
 
 
 def train(trace_paths: List[str], out_path: str, epochs: int = 20,
-          lr: float = 0.1) -> Dict[str, Any]:
+          lr: float = 0.05) -> Dict[str, Any]:
+    from collections import Counter
     samples = load_samples(trace_paths)
     policy = LocalPolicyController()
     before = accuracy(policy, samples)
-    for _ in range(epochs):
-        for s in samples:
-            policy.update(s["feat"], s["label"], lr=lr)
+    if samples:
+        classes = sorted(set(s["label"] for s in samples) | {"absent", "global", "targeted"})
+        counts = Counter(s["label"] for s in samples)
+        total = len(samples)
+        class_weights = {
+            v: total / (len(classes) * max(counts[v], 1))
+            for v in classes
+        }
+        for _ in range(epochs):
+            for s in samples:
+                w_c = class_weights.get(s["label"], 1.0)
+                policy.update(s["feat"], s["label"], lr=lr * w_c, candidate_actions=classes)
     after = accuracy(policy, samples)
     policy.save(out_path)
     stats = {"samples": len(samples), "accuracy_before": before,
@@ -164,17 +187,18 @@ def train(trace_paths: List[str], out_path: str, epochs: int = 20,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a controller from decision traces.")
-    parser.add_argument("--mode", choices=("sft", "rl", "qwen_sft", "qwen_rl", "sft-qwen", "rl-qwen"),
-                        default="sft",
-                        help="sft/rl: linear LocalPolicy; qwen_sft: LoRA SFT; "
-                             "qwen_rl: trace-replay completion-level REINFORCE")
+    parser.add_argument("--mode", choices=("linear_sft", "linear_rl", "qwen_sft", "qwen_rl", "sft", "rl"),
+                        default="linear_sft",
+                        help="linear_sft/linear_rl (or sft/rl): linear LocalPolicy; "
+                             "qwen_sft: LoRA SFT; "
+                             "qwen_rl: trajectory-level GRPO (Chapter 4)")
     parser.add_argument("--traces", nargs="+", default=None,
                         help="trace files or summary.json manifests")
     parser.add_argument("--run-dir", action="append", default=[],
                         help="benchmark run directory to search for summaries")
     parser.add_argument("--baseline", default=None,
                         help="optional source baseline; legacy aliases are accepted")
-    parser.add_argument("--split", choices=("all", "train", "test"), default="train",
+    parser.add_argument("--split", choices=("all", "train", "test", "train_hard", "test_hard"), default="train",
                         help="episode split for manifest-backed traces")
     parser.add_argument("--manifest", default=None,
                         help="frozen experiment manifest for summary-backed trace filtering")
@@ -186,7 +210,7 @@ if __name__ == "__main__":
     parser.add_argument("--rewards", nargs="+", default=None,
                         help="summary.json paths (parallel to --traces) providing real "
                              "task_score for the RL credit loop")
-    parser.add_argument("--base-model", default="Qwen/Qwen3-4B-Instruct-2507",
+    parser.add_argument("--base-model", default="Qwen/Qwen3.5-4B",
                         help="base model for Qwen LoRA training")
     parser.add_argument("--outcome-gated", action="store_true", default=True,
                         help="RLVR outcome-gating on auxiliary collaboration bonuses")
@@ -195,7 +219,8 @@ if __name__ == "__main__":
     parser.add_argument("--anchor-coeff", type=float, default=0.005,
                         help="SFT anchor coefficient to prevent covariate drift")
     args = parser.parse_args()
-    if args.mode in ("sft", "qwen_sft", "sft-qwen"):
+    mode = {"sft": "linear_sft", "rl": "linear_rl"}.get(args.mode, args.mode)
+    if mode in ("linear_sft", "qwen_sft"):
         trace_paths = discover_sft_traces(
             [*(args.traces or []), *args.run_dir],
             baseline=args.baseline,
@@ -208,24 +233,27 @@ if __name__ == "__main__":
         if not args.traces:
             parser.error("--traces is required for RL")
         trace_paths = args.traces
-    if args.mode in ("qwen_sft", "qwen_rl", "sft-qwen", "rl-qwen"):
+
+    if mode == "qwen_sft":
         from marble.controllers import qwen_lora
 
-        if args.mode in ("qwen_sft", "sft-qwen"):
-            pairs = qwen_lora.export_sft_pairs(trace_paths)
-            qwen_lora.train_qwen_sft(pairs, args.out, args.base_model, epochs=args.epochs)
-        else:
-            if not args.rewards:
-                parser.error("--rewards is required for qwen_rl")
-            rewards = [
-                float(json.load(open(reward_path, encoding="utf-8")).get("task_score", 0.0))
-                for reward_path in args.rewards
-            ]
-            qwen_lora.train_qwen_rl(
-                trace_paths, args.out, args.base_model, rewards=rewards,
-                epochs=args.epochs, init_checkpoint=args.init,
-            )
-    elif args.mode == "rl":
+        pairs = qwen_lora.export_sft_pairs(trace_paths)
+        qwen_lora.train_qwen_sft(pairs, args.out, args.base_model, epochs=args.epochs)
+    elif mode == "qwen_rl":
+        from marble.controllers import qwen_lora
+
+        if not args.rewards:
+            parser.error("--rewards is required for qwen_rl")
+        rewards = [
+            float(json.load(open(reward_path, encoding="utf-8")).get("task_score", 0.0))
+            for reward_path in args.rewards
+        ]
+        epochs = 1 if args.epochs == 20 else args.epochs
+        qwen_lora.train_qwen_rl(
+            trace_paths, args.out, args.base_model, rewards=rewards,
+            epochs=epochs, init_checkpoint=args.init,
+        )
+    elif mode == "linear_rl":
         from marble.controllers.rl_controller import train_rl
 
         task_scores = None

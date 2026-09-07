@@ -114,11 +114,12 @@ def test_private_to_global_ablation():
     wrapped = wrap_controller(inner, "visibility", "private_to_global")
     assert isinstance(wrapped, PrivateToGlobal)
 
-    # PrivateOnlyController would produce 'private'; wrapped forces 'global'
+    # PrivateOnlyController produces 'targeted'; wrapped forces 'global'
     target_unwrapped = inner.decide(_proposal(), [])
-    assert target_unwrapped.visibility == "private"
+    assert target_unwrapped.visibility == "targeted"
     target_wrapped = wrapped.decide(_proposal(), [])
     assert target_wrapped.visibility == "global"
+    assert target_wrapped.target_recipients == ()
     assert target_wrapped.exists == target_unwrapped.exists
 
     cfg = {"memory": {}}

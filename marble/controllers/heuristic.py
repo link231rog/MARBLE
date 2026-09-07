@@ -35,7 +35,7 @@ def _find_supersedes(
         if (
             item.active
             and item.task_id == proposal.task_id
-            and (item.visibility == "global" or item.owner_id == proposal.agent_id)
+            and (item.visibility == "global" or proposal.agent_id in getattr(item, "target_recipients", ()))
             and item.title.strip().casefold() == normalized
         ):
             return item.memory_id
@@ -53,7 +53,7 @@ class GlobalAlwaysController:
         return MemoryTargetState(
             exists=True,
             visibility="global",
-            owner_id=None,
+            target_recipients=(),
             supersedes=_find_supersedes(proposal, current_state),
         )
 
@@ -70,7 +70,7 @@ class AbsentController:
 
 
 class PrivateOnlyController:
-    """Store every proposal as private to its author."""
+    """Store every proposal as private to its author (routed to author only)."""
 
     def decide(
         self,
@@ -79,8 +79,8 @@ class PrivateOnlyController:
     ) -> MemoryTargetState:
         return MemoryTargetState(
             exists=True,
-            visibility="private",
-            owner_id=proposal.agent_id,
+            visibility="targeted",
+            target_recipients=(proposal.agent_id,),
             supersedes=_find_supersedes(proposal, current_state),
         )
 
@@ -133,7 +133,7 @@ class LTSStyleController:
 
 
 class HeuristicController:
-    """Private by default, global on shared-signal titles, absent when empty."""
+    """Targeted to author by default, global on shared-signal titles, absent when empty."""
 
     def decide(
         self,
@@ -144,10 +144,10 @@ class HeuristicController:
         if not proposal.raw_value.strip():
             return MemoryTargetState(False, "absent")
         if _SHARED_SIGNALS.search(proposal.title):
-            return MemoryTargetState(True, "global", supersedes=supersedes)
+            return MemoryTargetState(True, "global", target_recipients=(), supersedes=supersedes)
         return MemoryTargetState(
             True,
-            "private",
-            owner_id=proposal.agent_id,
+            "targeted",
+            target_recipients=(proposal.agent_id,),
             supersedes=supersedes,
         )

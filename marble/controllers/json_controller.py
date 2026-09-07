@@ -15,7 +15,7 @@ from marble.memory.schema import (
     TOPIC_TAXONOMY,
 )
 
-VALID_VISIBILITIES = ("absent", "private", "global")
+VALID_VISIBILITIES = ("absent", "global")
 
 # Dynamic input-field ablations accepted in drop_fields.
 _BLOCK_DROPS = frozenset({"topics", "memory_summary", "active_memory_index"})
@@ -62,13 +62,21 @@ class JsonController:
     # ------------------------------------------------------------------ prompt
     def build_prompt(self, proposal: MemoryProposal, current_state: Sequence[MemoryItem]) -> str:
         same_title = _find_same_title(proposal, current_state)
+        agent_ids = sorted(self.agent_role_map.keys())
+        example_agent_1 = f'["{agent_ids[0]}"]' if agent_ids else '["agent_1"]'
+        example_agent_2 = (
+            f'["{agent_ids[0]}", "{agent_ids[1]}"]'
+            if len(agent_ids) >= 2
+            else f'["agent_1", "agent_2"]'
+        )
         lines: List[str] = [
             "[SYSTEM]",
             f"agent_role_map: {json.dumps(self.agent_role_map, ensure_ascii=False, sort_keys=True)}",
             f"topic_taxonomy: {list(TOPIC_TAXONOMY)}",
-            "visibility: absent removes memory; private exposes only to owner; global exposes to all agents.",
+            "visibility: absent removes memory; global exposes to all agents; a JSON array of agent IDs (e.g. "
+            f'{example_agent_1} or {example_agent_2}) from agent_role_map routes strictly to those agents.',
             "supersedes: use an exact active memory_id only when replacing that memory.",
-            'output: ONLY {"visibility": "absent"|"private"|"global", "supersedes": null}.',
+            'output: ONLY {"visibility": "absent"|"global"|["<agent_id>", ...], "supersedes": null}.',
         ]
 
         # [TASK] — task context, present in all variants
@@ -97,9 +105,10 @@ class JsonController:
                     continue
                 summary = "" if "memory_summary" in self.drop_fields else f" | summary: {it.summary}"
                 topics = "" if "topics" in self.drop_fields else f" | topics: {list(it.topics)}"
+                recipients = list(it.target_recipients)
                 lines.append(
                     f"- memory_id: {it.memory_id} | title: {it.title}{summary}{topics} | "
-                    f"visibility: {it.visibility} | owner_id: {it.owner_id}"
+                    f"visibility: {it.visibility} | target_recipients: {recipients}"
                 )
             lines.append(f"same_title_active: {'true' if same_title else 'false'}")
         else:
@@ -137,12 +146,24 @@ class JsonController:
         if "active_memory_index" in self.drop_fields:
             supersedes = None
         resolved = _resolve_supersedes(supersedes, current_state, proposal)
-        return MemoryTargetState(
-            exists=True,
-            visibility=visibility,
-            owner_id=proposal.agent_id if visibility == "private" else None,
-            supersedes=resolved,
-        )
+
+        if visibility == "global":
+            return MemoryTargetState(
+                exists=True,
+                visibility="global",
+                target_recipients=(),
+                supersedes=resolved,
+            )
+        elif isinstance(visibility, list):
+            recipients = tuple(sorted(set(visibility)))
+            return MemoryTargetState(
+                exists=True,
+                visibility="targeted",
+                target_recipients=recipients,
+                supersedes=resolved,
+            )
+        else:
+            return MemoryTargetState(exists=False, visibility="absent")
 
     # --------------------------------------------------------------- validation
     def _validate(
@@ -160,8 +181,22 @@ class JsonController:
         if set(parsed) != {"visibility", "supersedes"}:
             return f"expected exactly keys visibility/supersedes, got {sorted(parsed)}"
         visibility = parsed["visibility"]
-        if visibility not in VALID_VISIBILITIES:
-            return f"invalid visibility {visibility!r}"
+        if visibility not in ("absent", "global"):
+            if not isinstance(visibility, list):
+                return f"invalid visibility {visibility!r}"
+            if len(visibility) == 0:
+                return "recipient list cannot be empty"
+            if "global" in visibility:
+                return "'global' cannot be included in recipient list"
+            known_agents = set(self.agent_role_map.keys())
+            if known_agents:
+                for aid in visibility:
+                    if not isinstance(aid, str) or aid not in known_agents:
+                        return f"unknown recipient agent_id {aid!r}"
+            else:
+                for aid in visibility:
+                    if not isinstance(aid, str):
+                        return f"recipient agent_id {aid!r} must be a string"
         supersedes = parsed["supersedes"]
         if visibility == "absent":
             if supersedes is not None:

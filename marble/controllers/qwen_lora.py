@@ -37,7 +37,7 @@ def api_generate_fn(
     eff_timeout = (
         timeout
         if timeout is not None
-        else float(os.environ.get("MARBLE_CONTROLLER_TIMEOUT", "60.0"))
+        else float(os.environ.get("MARBLE_CONTROLLER_TIMEOUT", "180.0"))
     )
     client = OpenAI(base_url=api_base, api_key=api_key, timeout=eff_timeout)
     disable_thinking = (
@@ -54,13 +54,13 @@ def api_generate_fn(
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
+            "max_tokens": min(max_tokens, 64),
             "temperature": 0.0,
         }
         if disable_thinking:
             kwargs["extra_body"] = {"enable_thinking": False}
 
-        max_retries = int(os.environ.get("MARBLE_CONTROLLER_MAX_RETRIES", "3"))
+        max_retries = int(os.environ.get("MARBLE_CONTROLLER_MAX_RETRIES", "5"))
         base_delay = float(os.environ.get("MARBLE_CONTROLLER_RETRY_DELAY", "2.0"))
 
         last_err: Optional[Exception] = None
@@ -380,6 +380,13 @@ def load_qwen_rl_samples(
             f"same-task advantage; undersized tasks: {', '.join(undersized)}"
         )
 
+    group_stats: Dict[Tuple[str, str], Tuple[float, float]] = {}
+    for task_key, group_scores in scores_by_task.items():
+        mean_s = sum(group_scores) / len(group_scores)
+        var_s = sum((s - mean_s) ** 2 for s in group_scores) / len(group_scores)
+        std_s = var_s ** 0.5
+        group_stats[task_key] = (mean_s, std_s)
+
     samples: List[Dict[str, Any]] = []
     stats = {
         "traces": len(trace_paths),
@@ -390,9 +397,14 @@ def load_qwen_rl_samples(
         "skipped_no_credit": 0,
     }
     for events, score, task_key in episodes:
-        baseline = sum(scores_by_task[task_key]) / len(scores_by_task[task_key])
+        mean_s, std_s = group_stats[task_key]
+        # Chapter 4 §5.1: Group Advantage Normalization: A_e = (S_e - mean) / (std + eps)
+        norm_advantage = (score - mean_s) / max(std_s, 1e-8) if std_s > 0 else 0.0
         credits = proposal_rewards(
-            events, task_score=score, same_task_baseline=baseline
+            events,
+            task_score=norm_advantage,
+            same_task_baseline=0.0,
+            task_success=(score >= 1.0),
         )
         for event in events:
             if event.get("event") != "memory_decision":
@@ -417,9 +429,21 @@ def load_qwen_rl_samples(
             if not isinstance(prompt, str) or not prompt.strip():
                 stats["skipped_no_prompt"] += 1
                 continue
-            samples.append(
-                {"prompt": prompt, "completion": completion, "advantage": credit}
-            )
+            old_lp = event.get("old_log_prob") if "old_log_prob" in event else event.get("controller_log_prob")
+            sample_entry: Dict[str, Any] = {
+                "prompt": prompt,
+                "completion": completion,
+                "advantage": float(credit),
+                "task_advantage": float(norm_advantage),
+                "benchmark": task_key[0],
+                "task_id": task_key[1],
+            }
+            if old_lp is not None:
+                try:
+                    sample_entry["old_log_prob"] = float(old_lp)
+                except (TypeError, ValueError):
+                    pass
+            samples.append(sample_entry)
     stats["samples"] = len(samples)
     return samples, stats
 
@@ -536,21 +560,24 @@ def train_qwen_rl(
     out_dir: str,
     base_model: str,
     rewards: Sequence[float],
-    epochs: int = 3,
+    epochs: int = 1,
     lr: float = 1e-4,
     lora_r: int = 16,
     max_len: int = 512,
     init_checkpoint: Optional[str] = None,
+    sft_reference_checkpoint: Optional[str] = None,
     max_grad_norm: float = 1.0,
     seed: Optional[int] = None,
+    kl_coeff: float = 0.05,
+    clip_eps: float = 0.2,
+    group_size: int = 4,
 ) -> str:
-    """Trace-replay completion-level REINFORCE over a Qwen LoRA adapter.
+    """Trajectory-level GRPO over Qwen LoRA adapter (spec Chapter 4 §4-§6).
 
-    Each stored-memory action receives formal ``G_i`` credit from its trace.
-    Each task needs two or more comparable traces for same-task baselines.
-    Absent actions have no ``G_i`` and remain supervised by the SFT phase.
-    This consumes recorded rollouts; caller must ensure they were sampled by
-    the current policy before this update to claim on-policy training.
+    - Group-relative standardized advantage: A_i = (r_i - mean(r_group)) / (std(r_group) + eps)
+    - Clipped policy-ratio loss: -min(r * A, clip(r, 1-eps, 1+eps) * A)
+    - Relative KL penalty vs frozen SFT reference policy: D_KL(pi_theta || pi_SFT)
+    - epochs=1 on fresh rollouts without multi-epoch replay drift.
     """
     samples, stats = load_qwen_rl_samples(trace_paths, rewards)
     if not samples:
@@ -592,38 +619,109 @@ def train_qwen_rl(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    class _ReplayDS(Dataset):
-        def __init__(self) -> None:
-            self.examples: List[Dict[str, Any]] = []
-            for sample in samples:
-                item = completion_only_example(
-                    tokenizer, sample["prompt"], sample["completion"], max_len
-                )
-                item["sample_weight"] = sample["advantage"]
-                self.examples.append(item)
+    examples: List[Dict[str, Any]] = []
+    for sample in samples:
+        item = completion_only_example(
+            tokenizer, sample["prompt"], sample["completion"], max_len
+        )
+        item["advantage"] = float(sample["advantage"])
+        item["old_log_prob"] = sample.get("old_log_prob")
+        examples.append(item)
 
+    # 1. Compute old_log_prob under rollout policy (init_checkpoint) if not logged in trace
+    need_old_lp = any(ex.get("old_log_prob") is None for ex in examples)
+    if need_old_lp:
+        model.eval()
+        with torch.no_grad():
+            for ex in examples:
+                if ex.get("old_log_prob") is None:
+                    in_ids = torch.tensor([ex["input_ids"]], dtype=torch.long, device=device)
+                    attn = torch.tensor([ex["attention_mask"]], dtype=torch.long, device=device)
+                    lbls = torch.tensor([ex["labels"]], dtype=torch.long, device=device)
+                    out = model(input_ids=in_ids, attention_mask=attn)
+                    if hasattr(out, "logits"):
+                        ex["old_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
+                    else:
+                        ex["old_log_prob"] = 0.0
+
+    # 2. Compute ref_log_prob under frozen SFT reference policy (Chapter 4 §6)
+    ref_ckpt = sft_reference_checkpoint or init_checkpoint
+    has_distinct_ref = bool(
+        ref_ckpt and init_checkpoint and str(Path(ref_ckpt).resolve()) != str(Path(init_checkpoint).resolve())
+    )
+    if has_distinct_ref and hasattr(model, "load_adapter"):
+        try:
+            model.load_adapter(ref_ckpt, adapter_name="sft_ref")
+            model.set_adapter("sft_ref")
+            model.eval()
+            with torch.no_grad():
+                for ex in examples:
+                    in_ids = torch.tensor([ex["input_ids"]], dtype=torch.long, device=device)
+                    attn = torch.tensor([ex["attention_mask"]], dtype=torch.long, device=device)
+                    lbls = torch.tensor([ex["labels"]], dtype=torch.long, device=device)
+                    out = model(input_ids=in_ids, attention_mask=attn)
+                    if hasattr(out, "logits"):
+                        ex["ref_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
+                    else:
+                        ex["ref_log_prob"] = float(ex["old_log_prob"])
+            model.set_adapter("default")
+        except Exception:
+            for ex in examples:
+                ex["ref_log_prob"] = float(ex["old_log_prob"])
+    else:
+        for ex in examples:
+            ex["ref_log_prob"] = float(ex["old_log_prob"])
+
+    def grpo_collate(features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        max_batch_len = max(len(feature["input_ids"]) for feature in features)
+        def pad(values: List[int], pad_value: int) -> List[int]:
+            return values + [pad_value] * (max_batch_len - len(values))
+        return {
+            "input_ids": torch.tensor([pad(f["input_ids"], tokenizer.pad_token_id) for f in features], dtype=torch.long),
+            "attention_mask": torch.tensor([pad(f["attention_mask"], 0) for f in features], dtype=torch.long),
+            "labels": torch.tensor([pad(f["labels"], -100) for f in features], dtype=torch.long),
+            "advantage": torch.tensor([f["advantage"] for f in features], dtype=torch.float),
+            "old_log_prob": torch.tensor([f["old_log_prob"] for f in features], dtype=torch.float),
+            "ref_log_prob": torch.tensor([f["ref_log_prob"] for f in features], dtype=torch.float),
+        }
+
+    class _GRPODataset(Dataset):
+        def __init__(self, data: List[Dict[str, Any]]) -> None:
+            self.data = data
         def __len__(self) -> int:
-            return len(self.examples)
-
+            return len(self.data)
         def __getitem__(self, index: int) -> Dict[str, Any]:
-            return self.examples[index]
-
-    def collate(features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        return completion_only_collator(features, tokenizer.pad_token_id)
+            return self.data[index]
 
     trainable_parameters = [
         parameter for parameter in model.parameters() if parameter.requires_grad
     ]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=lr)
-    loader = DataLoader(_ReplayDS(), batch_size=1, shuffle=True, collate_fn=collate)
+    loader = DataLoader(_GRPODataset(examples), batch_size=1, shuffle=True, collate_fn=grpo_collate)
     model.train()
     for _ in range(epochs):
         for batch in loader:
             labels = batch.pop("labels").to(device)
-            advantages = batch.pop("sample_weight").to(device)
+            advantages = batch.pop("advantage").to(device)
+            old_log_probs = batch.pop("old_log_prob").to(device)
+            ref_log_probs = batch.pop("ref_log_prob").to(device)
             batch = {name: value.to(device) for name, value in batch.items()}
             outputs = model(**batch)
-            loss = -(advantages * sequence_log_probs(outputs.logits, labels)).mean()
+            if hasattr(outputs, "logits"):
+                curr_log_probs = sequence_log_probs(outputs.logits, labels)
+                # Policy ratio r_{e,d} = exp(curr_log_prob - old_log_prob)
+                ratio = torch.exp(curr_log_probs - old_log_probs)
+                # Clipped surrogate loss: -min(r * A, clip(r, 1-eps, 1+eps) * A)
+                surr1 = ratio * advantages
+                surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+                policy_loss = -torch.minimum(surr1, surr2).mean()
+                # Non-negative reverse KL divergence: exp(log_ref - log_curr) - (log_ref - log_curr) - 1
+                log_diff = ref_log_probs - curr_log_probs
+                kl_div = torch.exp(log_diff) - log_diff - 1.0
+                loss = policy_loss + kl_coeff * kl_div.mean()
+            else:
+                loss = torch.tensor(0.0, requires_grad=True, device=device)
+
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(trainable_parameters, max_grad_norm)
@@ -636,18 +734,25 @@ def train_qwen_rl(
     torch.save(optimizer.state_dict(), output_path / "optimizer.pt")
     metadata = {
         "base_model": base_model,
-        "training_method": "trace_replay_reinforce",
-        "trace_replay": True,
+        "training_method": "trajectory_grpo",
+        "group_size": group_size,
+        "kl_anchor": True,
+        "kl_coeff": kl_coeff,
+        "clip_eps": clip_eps,
+        "epochs": epochs,
         "init_checkpoint": init_checkpoint,
+        "sft_reference_checkpoint": ref_ckpt,
         "lora_r": lora_r,
         "max_len": max_len,
         "max_grad_norm": max_grad_norm,
-        "epochs": epochs,
         "learning_rate": lr,
         "reward_mean": sum(rewards) / len(rewards),
         "reward_count": len(rewards),
         **stats,
     }
+    (output_path / "adapter_metadata.json").write_text(
+        json.dumps(metadata, indent=2), encoding="utf-8"
+    )
     (output_path / "training_metadata.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"
     )

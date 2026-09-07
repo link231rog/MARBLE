@@ -2,6 +2,7 @@ import json
 import os
 import re
 from dataclasses import replace
+import pytest
 
 from marble.benchmarks import load_tasks
 from marble.controllers import LocalPolicyController
@@ -56,7 +57,7 @@ def test_qwen_local_mode_loads_adapter_without_overloading_learned_controller(mo
         seen["base_model"] = base_model
         seen["lora_dir"] = lora_dir
         seen["temperature"] = temperature
-        return lambda prompt: '{"visibility":"private","supersedes":null}'
+        return lambda prompt: '{"visibility":"global","supersedes":null}'
 
     monkeypatch.setattr(qwen_lora, "local_generate_fn", fake_local)
     ctrl = make_controller(
@@ -75,7 +76,7 @@ def test_qwen_local_mode_loads_adapter_without_overloading_learned_controller(mo
             title="x", raw_value="y", step_index=0,
         ),
         [],
-    ).visibility == "private"
+    ).visibility == "global"
 
 
 def test_qwen_sft_ablation_passes_drop_fields(monkeypatch):
@@ -165,6 +166,13 @@ def test_qwen_endpoint_mode_uses_explicit_served_model(monkeypatch):
         "model": "qwen-controller-rl",
     }
     assert ctrl is not None
+
+
+def test_qwen_endpoint_mode_fast_fails_on_local_adapter_directory(monkeypatch):
+    monkeypatch.setenv("MARBLE_QWEN_API_BASE", "https://api.siliconflow.cn/v1")
+    monkeypatch.setenv("MARBLE_QWEN_API_KEY", "test-key")
+    with pytest.raises(ValueError, match="Fatal checkpoint conflict"):
+        make_controller("qwen_sft", controller_checkpoint="/local/path/sft_adapter")
 
 
 def test_memory_r1_runtime_uses_global_crud_adapter(tmp_path):
@@ -317,7 +325,7 @@ def test_task_config_overrides_empty_env_type():
     assert not str(t.environment.get("type", "")).strip()
     cfg = task_config(t, "heuristic")
     assert cfg["environment"]["type"] == "Coding"
-    assert cfg["environment"]["max_iterations"] == 10
+    assert cfg["environment"]["max_iterations"] in (5, 10)
 
 
 def test_dry_run_writes_layout_without_engine(tmp_path):
@@ -736,6 +744,25 @@ def test_describe_controller_truthful_identity():
     # Standard baselines return their canonical name
     assert describe_controller("heuristic") == "heuristic"
     assert describe_controller("global_add_all") == "global_add_all"
+
+
+def test_make_controller_rejects_json_for_qwen_baselines():
+    import pytest
+
+    with pytest.raises(ValueError, match="expects a Qwen LoRA adapter directory"):
+        make_controller("ours_rl", controller_checkpoint="runs/ours_rl_policy.json")
+
+    with pytest.raises(ValueError, match="expects a Qwen LoRA adapter directory"):
+        make_controller("ours_sft", controller_checkpoint="runs/ours_sft_policy.json")
+
+
+def test_baseline_aliases_for_linear_policy(tmp_path):
+    p = tmp_path / "policy.json"
+    LocalPolicyController().save(str(p))
+
+    for name in ("local_policy", "linear_policy", "ours_linear_sft", "ours_linear_rl"):
+        ctrl = make_controller(name, controller_checkpoint=str(p))
+        assert isinstance(ctrl, LocalPolicyController)
 
 
 

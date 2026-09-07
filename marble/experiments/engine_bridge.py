@@ -78,7 +78,7 @@ class MemoryStep:
         if cards:
             key_lines = [
                 "Shared memory keys:",
-                *[f"- [M{i+1}] {c.title} ({c.visibility})" for i, c in enumerate(cards)],
+                *[f"- [M{i+1}] {c.title} ({getattr(c, 'visibility', 'global')})" for i, c in enumerate(cards)],
             ]
             notes = self._read_selected(agent_id, cards)
             if hasattr(self.memory, "distill"):
@@ -164,8 +164,9 @@ class MemoryStep:
             })
         item = self.memory.submit(proposal, **metadata)
         if item is not None:
+            vis = getattr(item, "visibility", getattr(item, "tier", getattr(item, "access_tier", "global")))
             print(
-                f"[Memory] [{self.task_id}][{agent_id}] proposal -> stored as {item.visibility} (id: {item.memory_id})",
+                f"[Memory] [{self.task_id}][{agent_id}] proposal -> stored as {vis} (id: {item.memory_id})",
                 flush=True,
             )
         else:

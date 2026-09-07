@@ -326,3 +326,36 @@ def test_trace_metrics_section_12_7_spec():
     assert m_fail["negative_transfer"] == 1
 
 
+def test_trace_metrics_targeted_memory_evaluation():
+    """Chapter 5: evaluate_memory_trace accurately captures targeted memory metrics without 0-collapse."""
+    events = [
+        {
+            "event": "memory_decision",
+            "memory_id": "m_targ1",
+            "proposal": {"agent_id": "a1", "raw_value": "secret query plan"},
+            "target": {"visibility": "targeted", "target_recipients": ["a2"], "supersedes": None},
+        },
+        {
+            "event": "memory_decision",
+            "memory_id": "m_targ2",
+            "proposal": {"agent_id": "a1", "raw_value": "joint architecture"},
+            "target": {"visibility": "targeted", "target_recipients": ["a1", "a2"], "supersedes": None},
+        },
+        _read("m_targ1", "a2"),  # targeted cross-read by designated recipient
+        _read("m_targ2", "a1"),  # targeted owner/producer reuse
+    ]
+    metrics = evaluate_memory_trace(events, task_success=1.0)
+    assert metrics["targeted_written"] == 2
+    assert metrics["private_written"] == 2  # backwards compatible mirror
+    assert metrics["targeted_read"] == 2
+    assert metrics["private_read"] == 2
+    assert metrics["targeted_owner_reuse"] == 1
+    assert metrics["private_owner_reuse"] == 1
+    assert metrics["targeted_cross_read"] == 1
+    assert metrics["active_targeted_count"] == 2
+    assert metrics["active_private_count"] == 2
+    assert metrics["active_targeted_tokens"] == 5
+    assert metrics["active_private_tokens"] == 5
+    assert metrics["cross_agent_reads"] == 1
+
+

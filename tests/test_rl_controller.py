@@ -123,7 +123,6 @@ def test_rl_trainer_restores_active_state_for_features():
         "title": "same plan",
         "raw_value": "old",
         "visibility": "global",
-        "owner_id": None,
         "source_agent": "a1",
         "source": "worker",
         "step_index": 0,
@@ -141,5 +140,35 @@ def test_rl_trainer_restores_active_state_for_features():
     assert trainer.update_event(event, credit=1.0) is True
     # has_supersedes weight for global should have increased from 0.0
     assert ctrl.weights["global"]["has_supersedes"] > 0.0
+
+
+def test_rl_trainer_multi_agent_recipients(tmp_path):
+    ctrl = LocalPolicyController()
+    trainer = RLTrainer(ctrl, lr=0.1)
+    ev = {
+        "event": "memory_decision",
+        "memory_id": "m_pair",
+        "target": {"visibility": ["agent_1", "agent_2"]},
+        "proposal": {"proposal_id": "p_pair", "task_id": "t", "agent_id": "agent_1",
+                     "title": "pair plan", "raw_value": "coords"},
+    }
+    # Positive credit reinforces this recipient set
+    assert trainer.update_event(ev, credit=1.5) is True
+    assert '["agent_1", "agent_2"]' in ctrl.weights
+    assert ctrl.weights['["agent_1", "agent_2"]']["bias"] > 0.0
+
+    # Test train_rl roundtrip with multi-agent events
+    trace_path = tmp_path / "multi_rl_trace.jsonl"
+    events = [
+        ev,
+        {"event": "memory_read", "memory_id": "m_pair", "reader_id": "agent_2"},
+    ]
+    trace_path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    out_path = tmp_path / "multi_rl_out.json"
+    stats = train_rl([str(trace_path)], str(out_path), epochs=2)
+    assert stats["updates"] > 0
+    loaded = LocalPolicyController.load(str(out_path))
+    assert '["agent_1", "agent_2"]' in loaded.weights
+
 
 

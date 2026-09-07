@@ -146,7 +146,7 @@ def collect_rollouts(
                 controller_checkpoint=checkpoint,
                 qwen_base_model=qwen_base_model,
                 qwen_temperature=qwen_temperature,
-                seed=seed,
+                seed=seed + rollout_id,
                 max_cards=max_cards if max_cards is not None else 5,
                 lambda_=_lambda if _lambda is not None else 0.05,
                 beta=beta if beta is not None else 0.25,
@@ -198,9 +198,9 @@ def train_fresh_rollouts(
     task_ids: Optional[List[int]] = None,
     manifest: Optional[str] = None,
     limit: Optional[int] = None,
-    rollouts_per_task: int = 2,
+    rollouts_per_task: int = 4,
     rounds: int = 1,
-    qwen_base_model: str = "Qwen/Qwen3-4B-Instruct-2507",
+    qwen_base_model: str = "Qwen/Qwen3.5-4B",
     qwen_temperature: float = 0.7,
     max_iterations: Optional[int] = None,
     max_reads_per_step: int = 2,
@@ -213,7 +213,7 @@ def train_fresh_rollouts(
     beta: Optional[float] = None,
     seed: int = 42,
 ) -> Dict[str, Any]:
-    """Run repeated fresh-rollout -> REINFORCE updates from an SFT adapter."""
+    """Run repeated fresh-rollout -> trajectory GRPO updates from an SFT adapter."""
     if rounds < 1:
         raise ValueError("rounds must be at least 1")
     random.seed(seed)
@@ -333,7 +333,10 @@ def train_fresh_rollouts(
                 str(next_checkpoint),
                 qwen_base_model,
                 rewards=rewards,
+                epochs=1,
                 init_checkpoint=current_checkpoint,
+                sft_reference_checkpoint=str(Path(checkpoint).resolve()),
+                group_size=rollouts_per_task,
                 seed=seed,
             )
             if not _checkpoint_complete(next_checkpoint):
@@ -396,7 +399,7 @@ def train_fresh_rollouts(
 
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Fresh-rollout Qwen LoRA policy-gradient training"
+        description="Fresh-rollout Qwen LoRA trajectory GRPO training (Chapter 4)"
     )
     parser.add_argument("--benchmark", required=True)
     parser.add_argument("--checkpoint", required=True, help="initial SFT LoRA adapter")
@@ -404,10 +407,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--task-ids", default="")
     parser.add_argument("--manifest", default=None, help="frozen task manifest JSON")
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--rollouts-per-task", type=int, default=2)
+    parser.add_argument("--rollouts-per-task", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=1)
     parser.add_argument(
-        "--qwen-base-model", default="Qwen/Qwen3-4B-Instruct-2507"
+        "--qwen-base-model", default="Qwen/Qwen3.5-4B"
     )
     parser.add_argument("--qwen-temperature", type=float, default=0.7)
     parser.add_argument("--max-iterations", type=int, default=None)

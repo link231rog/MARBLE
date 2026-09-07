@@ -7,42 +7,56 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from marble.controllers.local_policy import VISIBILITIES, LocalPolicyController, features
+from marble.controllers.local_policy import (
+    VISIBILITIES,
+    LocalPolicyController,
+    canonical_action,
+    features,
+    serialize_action,
+)
 from marble.memory.schema import MemoryItem, MemoryProposal
 
 
-def _as_proposal(d: Dict[str, Any]) -> MemoryProposal:
+def _as_proposal(p: Dict[str, Any]) -> MemoryProposal:
     return MemoryProposal(
-        proposal_id=str(d.get("proposal_id", "replay")),
-        task_id=str(d.get("task_id", "")),
-        agent_id=str(d.get("agent_id", "")),
-        source=str(d.get("source", "worker")),
-        title=str(d.get("title", "")),
-        raw_value=str(d.get("raw_value", "")),
-        step_index=int(d.get("step_index", 0)),
+        proposal_id=str(p.get("proposal_id") or "p"),
+        task_id=str(p.get("task_id") or "t"),
+        agent_id=str(p.get("agent_id") or "a"),
+        source=str(p.get("source") or "worker"),
+        title=str(p.get("title") or ""),
+        raw_value=str(p.get("raw_value") or ""),
+        step_index=int(p.get("step_index") or 0),
     )
 
 
-def _as_memory_item(d: Any) -> MemoryItem | None:
-    if isinstance(d, MemoryItem):
-        return d
-    if not isinstance(d, dict):
-        return None
-    clean = dict(d)
-    if "topics" in clean and isinstance(clean["topics"], list):
-        clean["topics"] = tuple(clean["topics"])
+def _as_memory_item(d: Dict[str, Any]) -> MemoryItem | None:
     try:
-        return MemoryItem(**clean)
+        vis = d.get("visibility", "global")
+        if vis not in ("global", "targeted"):
+            vis = "targeted" if isinstance(vis, list) else "global"
+        return MemoryItem(
+            memory_id=str(d.get("memory_id") or "m"),
+            proposal_id=str(d.get("proposal_id") or "p"),
+            task_id=str(d.get("task_id") or "t"),
+            title=str(d.get("title") or ""),
+            raw_value=str(d.get("raw_value") or ""),
+            visibility=vis,
+            source_agent=str(d.get("source_agent") or "a"),
+            source=str(d.get("source") or "worker"),
+            step_index=int(d.get("step_index") or 0),
+            active=bool(d.get("active", True)),
+            supersedes=d.get("supersedes"),
+            created_at=int(d.get("created_at") or 0),
+            target_recipients=tuple(d.get("target_recipients") or ()),
+        )
     except Exception:
         return None
 
 
 class RLTrainer:
-    """Bandit-style update: proposals whose credit is positive are reinforced,
-    negative-credit ones are pushed away from their chosen visibility.
-    Includes SFT anchor regularization to prevent covariate drift (Chapter 3 §3.3)."""
+    """Online policy iteration for LocalPolicyController using REINFORCE-style updates."""
 
     def __init__(
         self,
@@ -61,34 +75,42 @@ class RLTrainer:
         target = event.get("target")
         if not proposal or not target:
             return False
-        chosen = target.get("visibility")
-        if chosen not in VISIBILITIES:
+        vis = target.get("visibility")
+        recipients = target.get("target_recipients") or ()
+        if vis not in ("absent", "global", "targeted", "private") and not isinstance(vis, (list, tuple)) and not recipients:
             return False
+        act = canonical_action(vis, recipients)
+        if not target.get("exists", True) and act != "absent":
+            act = "absent"
+        chosen = serialize_action(act)
+
         raw_active = event.get("active_memory_index") or []
         active_items = [it for it in (_as_memory_item(x) for x in raw_active) if it is not None]
-        feat = features(_as_proposal(proposal), active_items)
+        prop_obj = _as_proposal(proposal)
+        feat = features(prop_obj, active_items)
         if credit >= 0:
             self.controller.update(feat, chosen, lr=self.lr * credit)
             return True
         # negative advantage: move away from chosen toward the runner-up
-        scores = {
-            vis: sum(self.controller.weights[vis].get(k, 0.0) for k in feat)
-            for vis in VISIBILITIES
-        }
-        others = [v for v in VISIBILITIES if v != chosen]
-        runner_up = max(others, key=lambda v: scores[v])
-        self.controller.update(feat, runner_up, lr=self.lr * (-credit))
+        candidates = sorted(set(self.controller.weights.keys()) | {"absent", "global", "targeted"})
+        scores = self.controller.scores(feat, prop_obj)
+        others = [c for c in candidates if c != chosen]
+        if not others:
+            return False
+        runner_up = max(others, key=lambda c: scores.get(c, 0.0))
+        self.controller.update(feat, runner_up, lr=self.lr * (-credit), candidate_actions=candidates)
         return True
 
     def apply_anchor(self) -> None:
         """Chapter 3 §3.3: Anchor policy update to SFT prior to avoid covariate drift."""
         if not self.initial_weights or self.anchor_coeff <= 0:
             return
-        for vis in VISIBILITIES:
-            init_map = self.initial_weights.get(vis, {})
+        for act in self.initial_weights:
+            init_map = self.initial_weights.get(act, {})
+            curr_map = self.controller.weights.setdefault(act, {k: 0.0 for k in LocalPolicyController.FEATURE_KEYS})
             for k, init_val in init_map.items():
-                curr_val = self.controller.weights[vis].get(k, 0.0)
-                self.controller.weights[vis][k] = curr_val - self.anchor_coeff * (curr_val - init_val)
+                curr_val = curr_map.get(k, 0.0)
+                curr_map[k] = curr_val - self.anchor_coeff * (curr_val - init_val)
 
     def update_trace(self, events: List[Dict[str, Any]], credits: Dict[str, float]) -> int:
         steps = 0
@@ -135,8 +157,8 @@ def train_rl(
         controller = LocalPolicyController()
 
     init_weights_copy = {
-        vis: dict(controller.weights.get(vis, {}))
-        for vis in VISIBILITIES
+        act: dict(weights)
+        for act, weights in controller.weights.items()
     }
 
     trainer = RLTrainer(
