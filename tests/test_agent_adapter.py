@@ -80,7 +80,6 @@ def test_format_cards_renders_key_fields() -> None:
                 task_id="t",
                 title="Schema fix",
                 visibility="global",
-                owner_id=None,
             )
         ]
     )

@@ -443,7 +443,7 @@ class BaseAgent:
                                 "description": "The initial message to send to the target agent",
                             },
                         },
-                        "required": ["target_agent_id", "message"],
+                        "required": ["message"],
                         "additionalProperties": False,
                     },
                 },

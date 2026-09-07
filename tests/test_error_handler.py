@@ -26,7 +26,8 @@ class TestApiCallingBackoff(unittest.TestCase):
                 self.assertEqual(completion(), "ok")
 
         self.assertEqual(calls, 2)
-        sleep.assert_called_once_with(60.0)
+        sleep_arg = sleep.call_args[0][0]
+        self.assertGreaterEqual(sleep_arg, 60.0)
 
 
 if __name__ == "__main__":

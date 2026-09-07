@@ -22,7 +22,7 @@ def log_debug_info(message: str, log_file: str = "marble/logs/advice_log"):
 
 
 def give_advice_and_revise_handler(
-    env, task_description: str, model_name: str
+    env, task_description: str = "", model_name: str = "", **kwargs
 ) -> Dict[str, Any]:
     """
     Reads solution.py content, provides improvement suggestions based on task description, and revises the code accordingly.
@@ -56,25 +56,50 @@ def give_advice_and_revise_handler(
                 "error-msg": "Solution file is empty or contains invalid code. Please use create_solution first to generate valid code",
             }
 
-        config_path = "marble/configs/coding_config/coding_config.yaml"
-        if not os.path.exists(config_path):
-            return {
-                "success": False,
-                "error-msg": f"Config file not found at {config_path}",
-            }
+        # Dynamically resolve worker model
+        configured_model = None
+        if hasattr(env, "config") and isinstance(env.config, dict):
+            configured_model = env.config.get("llm")
+        if not configured_model:
+            configured_model = os.environ.get("MARBLE_WORKER_MODEL")
+        if not model_name or model_name in ("gpt-3.5-turbo", "default"):
+            model_name = configured_model or "openai/nvidia/nemotron-3-super-120b-a12b"
 
-        yaml = YAML()
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.load(f)
+        full_task_description = None
+        if hasattr(env, "config") and isinstance(env.config, dict):
+            task_node = env.config.get("task")
+            if isinstance(task_node, dict) and "content" in task_node:
+                full_task_description = task_node["content"]
+            elif "task_content" in env.config:
+                full_task_description = env.config["task_content"]
+        if not full_task_description and task_description and task_description.strip():
+            full_task_description = task_description
 
-        full_task_description = config["task"]["content"]
+        if not full_task_description:
+            config_path = "marble/configs/coding_config/coding_config.yaml"
+            if not os.path.exists(config_path):
+                return {
+                    "success": False,
+                    "error-msg": f"Config file not found at {config_path}",
+                }
+
+            yaml = YAML()
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.load(f)
+
+            full_task_description = config["task"]["content"]
 
         requirements_start = "1. Implementation requirements:\n"
         requirements_end = "\n\n2. Project structure:"
-        requirements = full_task_description[
-            full_task_description.find(requirements_start)
-            + len(requirements_start) : full_task_description.find(requirements_end)
-        ].strip()
+        if (
+            requirements_start in full_task_description
+            and requirements_end in full_task_description
+        ):
+            start_idx = full_task_description.find(requirements_start) + len(requirements_start)
+            end_idx = full_task_description.find(requirements_end)
+            requirements = full_task_description[start_idx:end_idx].strip()
+        else:
+            requirements = full_task_description
 
         # Step 1: Generate single most important suggestion
         system_prompt_advice = (
@@ -251,30 +276,68 @@ def register_reviewer_actions(env):
     """
     Register coding-related actions in the environment.
     """
+    default_model = "openai/nvidia/nemotron-3-super-120b-a12b"
+    if hasattr(env, "config") and isinstance(env.config, dict) and env.config.get("llm"):
+        default_model = env.config["llm"]
+    elif os.environ.get("MARBLE_WORKER_MODEL"):
+        default_model = os.environ["MARBLE_WORKER_MODEL"]
+
+    desc_revise = {
+        "type": "function",
+        "function": {
+            "name": "give_advice_and_revise",
+            "description": "Review existing solution.py file, provide improvement suggestions, and revise the code accordingly",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "Description of the task (will be read from config file)",
+                    },
+                    "model_name": {
+                        "type": "string",
+                        "description": "Name of the LLM model to use",
+                        "default": default_model,
+                    },
+                },
+                "required": ["task_description"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
     env.register_action(
         "give_advice_and_revise",
         handler=lambda **kwargs: give_advice_and_revise_handler(env, **kwargs),
-        description={
-            "type": "function",
-            "function": {
-                "name": "give_advice_and_revise",
-                "description": "Review existing solution.py file, provide improvement suggestions, and revise the code accordingly",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "task_description": {
-                            "type": "string",
-                            "description": "Description of the task (will be read from config file)",
-                        },
-                        "model_name": {
-                            "type": "string",
-                            "description": "Name of the LLM model to use",
-                            "default": "gpt-3.5-turbo",
-                        },
+        description=desc_revise,
+    )
+
+    desc_revise_alias = {
+        "type": "function",
+        "function": {
+            "name": "give_advice_and_revise_code",
+            "description": "Review existing solution.py file, provide improvement suggestions, and revise the code accordingly (alias for give_advice_and_revise)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "Description of the task (will be read from config file)",
                     },
-                    "required": ["task_description", "model_name"],
-                    "additionalProperties": False,
+                    "model_name": {
+                        "type": "string",
+                        "description": "Name of the LLM model to use",
+                        "default": default_model,
+                    },
                 },
+                "required": ["task_description"],
+                "additionalProperties": False,
             },
         },
+    }
+
+    env.register_action(
+        "give_advice_and_revise_code",
+        handler=lambda **kwargs: give_advice_and_revise_handler(env, **kwargs),
+        description=desc_revise_alias,
     )

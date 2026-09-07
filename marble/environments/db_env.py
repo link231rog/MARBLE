@@ -656,7 +656,7 @@ class DBEnvironment(BaseEnvironment):
     def terminate(self) -> None:
         project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
         subprocess.run(
-            ["docker", "compose", "-p", project, "down"],
+            ["docker", "compose", "-p", project, "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             check=True,
         )

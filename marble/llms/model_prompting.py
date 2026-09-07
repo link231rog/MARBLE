@@ -86,8 +86,15 @@ def model_prompting(
     Select model via router in LiteLLM with support for function calling.
     """
     # litellm.set_verbose=True
-    if base_url is None and llm_model.startswith("openai/"):
+    if base_url is None and (llm_model.startswith("openai/") or os.environ.get("OPENAI_API_BASE")):
         base_url = os.environ.get("OPENAI_API_BASE")
+    if "nvidia" in (base_url or "").lower():
+        if "gpt-3.5" in llm_model or "gpt-4" in llm_model or "default" in llm_model:
+            llm_model = os.environ.get("MARBLE_WORKER_MODEL", "openai/openai/gpt-oss-20b")
+        if "gpt-oss-20b" in llm_model:
+            llm_model = "openai/openai/gpt-oss-20b"
+    if not llm_model.startswith("openai/") and not _is_zai_request(llm_model, base_url) and "together_ai" not in llm_model and base_url:
+        llm_model = f"openai/{llm_model}"
     if base_url is None and "together_ai/TA" in llm_model:
         base_url = "https://api.ohmygpt.com/v1"
     is_zai = _is_zai_request(llm_model, base_url)
@@ -97,6 +104,13 @@ def model_prompting(
     if "Qwen" in llm_model:
         # ponytail: disable Qwen3 thinking so content is populated and generation is fast
         extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+    if ("nemotron" in llm_model or "nvidia" in llm_model):
+        # Enable thinking template for NVIDIA Nemotron reasoning models
+        extra_body["chat_template_kwargs"] = {"enable_thinking": True}
+        if max_token_num and max_token_num < 4096:
+            max_token_num = 8192
+        if top_p is None:
+            top_p = 0.95
     effective_reasoning_effort = reasoning_effort or os.environ.get(
         "MARBLE_REASONING_EFFORT"
     )
@@ -104,7 +118,7 @@ def model_prompting(
         extra_body["reasoning_effort"] = effective_reasoning_effort
         extra_body["allowed_openai_params"] = ["reasoning_effort"]
     completion_kwargs: Dict[str, Any] = {}
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVAPI_KEY")
     if is_zai:
         api_key = os.environ.get("ZAI_API_KEY") or api_key
     if api_key:
@@ -138,7 +152,10 @@ def model_prompting(
     if message_0 is None:
         message_0 = Message(content="", role="assistant")
     elif message_0.content is None:
-        message_0.content = getattr(message_0, "reasoning_content", None) or ""
+        if message_0.tool_calls:
+            message_0.content = ""
+        else:
+            message_0.content = getattr(message_0, "reasoning_content", None) or ""
     assert isinstance(message_0, Message)
     record_successful_completion(completion)
     return [message_0]

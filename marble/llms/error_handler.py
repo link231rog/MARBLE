@@ -32,7 +32,13 @@ def _is_rate_limit_error(error: Exception) -> bool:
 
     error_name = type(error).__name__.lower()
     message = str(error).lower()
-    return "ratelimit" in error_name or "rate limit" in message or "rpm exhausted" in message
+    return (
+        "ratelimit" in error_name
+        or "rate limit" in message
+        or "429" in message
+        or "too many requests" in message
+        or "rpm exhausted" in message
+    )
 
 
 def api_calling_error_exponential_backoff(
@@ -42,7 +48,7 @@ def api_calling_error_exponential_backoff(
 ) -> Callable[[T], T]:
     """
     Decorator for applying exponential backoff to a function.
-    :param retries: Maximum number of retries.
+    :param retries: Maximum number of retries for general errors.
     :param base_wait_time: Base wait time in seconds for the exponential backoff.
     :param rate_limit_base_wait_time: Optional base wait for 429 errors. When
         omitted, MARBLE_API_429_BASE_WAIT_TIME is used if set.
@@ -58,37 +64,49 @@ def api_calling_error_exponential_backoff(
                 modified_base_wait_time = 1
                 modified_rate_limit_base_wait_time = 1
             else:
-                modified_retries = retries
+                modified_retries = int(os.environ.get("MARBLE_API_RETRIES", str(retries)))
                 modified_base_wait_time = base_wait_time
                 modified_rate_limit_base_wait_time = rate_limit_base_wait_time
                 if modified_rate_limit_base_wait_time is None:
                     modified_rate_limit_base_wait_time = _configured_wait_time(
-                        "MARBLE_API_429_BASE_WAIT_TIME", base_wait_time
+                        "MARBLE_API_429_BASE_WAIT_TIME", 3.0
                     )
 
             attempts = 0
             last_exc: Optional[Exception] = None
-            while attempts < modified_retries:
+            max_429_retries = int(os.environ.get("MARBLE_API_429_MAX_RETRIES", "100"))
+            while True:
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exc = e
+                    is_429 = _is_rate_limit_error(e)
+                    current_max = max_429_retries if is_429 else modified_retries
+                    if attempts >= current_max:
+                        break
                     retry_base_wait_time = (
                         modified_rate_limit_base_wait_time
-                        if _is_rate_limit_error(e)
+                        if is_429
                         else modified_base_wait_time
                     )
-                    wait_time = retry_base_wait_time * (2**attempts)
-                    print(f"Attempt {attempts + 1} failed: {e}")
-                    print(f"Waiting {wait_time} seconds before retrying...")
+                    import random
+                    raw_wait = retry_base_wait_time * (2**min(attempts, 6))
+                    max_wait = float(os.environ.get("MARBLE_API_MAX_WAIT_TIME", "35.0"))
+                    if is_429:
+                        # Full jitter desynchronization: break lockstep retry storms across concurrent workers
+                        upper = min(raw_wait, max_wait)
+                        wait_time = random.uniform(retry_base_wait_time, max(upper, retry_base_wait_time)) + random.uniform(2.0, 8.0)
+                        print(f"[429 RateLimit] Attempt {attempts + 1}/{current_max} failed: {e}")
+                        print(f"[429 RateLimit] Backing off {wait_time:.1f}s before retrying (must retry, never fail on 429)...")
+                    else:
+                        wait_time = min(raw_wait, max_wait) + random.uniform(0.5, 2.5)
+                        print(f"Attempt {attempts + 1}/{current_max} failed: {e}")
+                        print(f"Waiting {wait_time:.1f} seconds before retrying...")
                     time.sleep(wait_time)
                     attempts += 1
             print(
-                f"Failed to execute '{func.__name__}' after {modified_retries} retries."
+                f"Failed to execute '{func.__name__}' after {attempts} retries."
             )
-            # ponytail: re-raise instead of returning None — None into a typed API
-            # crashes the caller with a confusing type violation; a real error is
-            # catchable and logged per-call site.
             if last_exc is not None:
                 raise last_exc
             return None
