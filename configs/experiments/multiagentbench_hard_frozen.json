@@ -2,26 +2,48 @@
   "version": 1,
   "seed": 42,
   "setting": "hard_stratified_evaluation",
-  "benchmarks": ["database", "research"],
-  "description": "Stratified Hard Evaluation Set with strictly orthogonal train and test tasks.",
+  "benchmarks": ["database", "research", "coding"],
+  "description": "Master Hard Benchmark Set: 12 Train Hard and 24 Test Hard tasks across database, research, and coding.",
   "splits": {
     "train_hard": [
       {"benchmark": "database", "task_id": 51, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
       {"benchmark": "database", "task_id": 52, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
       {"benchmark": "database", "task_id": 53, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "database", "task_id": 54, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
       {"benchmark": "research", "task_id": 10, "agent_count": 8, "category": "cross_disciplinary_high_coordination"},
       {"benchmark": "research", "task_id": 11, "agent_count": 22, "category": "extreme_agent_count_coordination"},
-      {"benchmark": "research", "task_id": 15, "agent_count": 9, "category": "cross_disciplinary_high_coordination"}
+      {"benchmark": "research", "task_id": 15, "agent_count": 9, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 29, "agent_count": 8, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "coding", "task_id": 51, "agent_count": 3, "category": "constraint_satisfaction_personalization"},
+      {"benchmark": "coding", "task_id": 52, "agent_count": 3, "category": "sequential_dependency_coordination"},
+      {"benchmark": "coding", "task_id": 53, "agent_count": 3, "category": "multi_stage_dependency_game"},
+      {"benchmark": "coding", "task_id": 47, "agent_count": 3, "category": "multi_stage_dependency_quest"}
     ],
     "test_hard": [
-      {"benchmark": "database", "task_id": 54, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
       {"benchmark": "database", "task_id": 55, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
-      {"benchmark": "database", "task_id": 56, "agent_count": 5, "root_causes": ["FETCH_LARGE_DATA", "INSERT_LARGE_DATA"]},
-      {"benchmark": "database", "task_id": 57, "agent_count": 5, "root_causes": ["INSERT_LARGE_DATA", "LOCK_CONTENTION"]},
+      {"benchmark": "database", "task_id": 56, "agent_count": 5, "root_causes": ["REDUNDANT_INDEX", "VACUUM"]},
+      {"benchmark": "database", "task_id": 57, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 58, "agent_count": 5, "root_causes": ["FETCH_LARGE_DATA", "INSERT_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 59, "agent_count": 5, "root_causes": ["INSERT_LARGE_DATA", "LOCK_CONTENTION"]},
+      {"benchmark": "database", "task_id": 60, "agent_count": 5, "root_causes": ["LOCK_CONTENTION", "REDUNDANT_INDEX"]},
+      {"benchmark": "database", "task_id": 61, "agent_count": 5, "root_causes": ["REDUNDANT_INDEX", "VACUUM"]},
+      {"benchmark": "database", "task_id": 62, "agent_count": 5, "root_causes": ["INSERT_LARGE_DATA", "LOCK_CONTENTION"]},
       {"benchmark": "research", "task_id": 18, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
       {"benchmark": "research", "task_id": 20, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
       {"benchmark": "research", "task_id": 26, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
-      {"benchmark": "research", "task_id": 51, "agent_count": 11, "category": "large_team_heterogeneous_coordination"}
+      {"benchmark": "research", "task_id": 30, "agent_count": 9, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 51, "agent_count": 11, "category": "large_team_heterogeneous_coordination"},
+      {"benchmark": "research", "task_id": 56, "agent_count": 7, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 59, "agent_count": 22, "category": "extreme_agent_count_coordination"},
+      {"benchmark": "research", "task_id": 77, "agent_count": 14, "category": "large_team_heterogeneous_coordination"},
+      {"benchmark": "coding", "task_id": 54, "agent_count": 3, "category": "deep_pipeline_moba_architecture"},
+      {"benchmark": "coding", "task_id": 55, "agent_count": 3, "category": "real_time_security_monitoring"},
+      {"benchmark": "coding", "task_id": 56, "agent_count": 3, "category": "cross_domain_healthcare_management"},
+      {"benchmark": "coding", "task_id": 57, "agent_count": 3, "category": "collaborative_analytics_pipeline"},
+      {"benchmark": "coding", "task_id": 14, "agent_count": 3, "category": "multi_agent_code_optimization"},
+      {"benchmark": "coding", "task_id": 31, "agent_count": 3, "category": "multi_layer_graphics_pipeline"},
+      {"benchmark": "coding", "task_id": 41, "agent_count": 3, "category": "distributed_workflow_coordination"},
+      {"benchmark": "coding", "task_id": 80, "agent_count": 3, "category": "collaborative_canvas_suite"}
     ]
   }
 }

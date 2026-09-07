@@ -207,6 +207,7 @@ marble/workspace
 #Coding Environment
 marble/workspace
 marble/logs
+marble/marble/
 marble/results
 backup/
 

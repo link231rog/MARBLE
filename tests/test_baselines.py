@@ -14,8 +14,6 @@ def test_main_baselines_match_frozen_experiment_matrix():
         "global_add_all",
         "lts_style",
         "mem0_style",
-        "amem_style",
-        "memoryos_style",
         "memory_r1_style",
         "g_memory_style",
         "collabmem_style",

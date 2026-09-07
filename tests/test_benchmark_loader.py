@@ -76,13 +76,31 @@ def test_stratified_frozen_manifest_has_expected_splits():
     test_std = load_manifest_tasks(path, split="test_standard")
     test_hard = load_manifest_tasks(path, split="test_hard")
 
-    assert len(train_std) == 6
-    assert len(train_hard) == 6
-    assert len(test_std) == 8
-    assert len(test_hard) == 8
+    assert len(train_std) == 9
+    assert len(train_hard) == 12
+    assert len(test_std) == 12
+    assert len(test_hard) == 24
+    assert {t.benchmark for t in train_std + train_hard + test_std + test_hard} == {"database", "research", "coding"}
 
     # Strict zero-leakage check
     train_keys = {(t.benchmark, t.task_id) for t in train_std + train_hard}
     test_keys = {(t.benchmark, t.task_id) for t in test_std + test_hard}
     assert train_keys.isdisjoint(test_keys)
+
+
+def test_hard_frozen_manifest_has_expected_splits():
+    from marble.experiments.task_manifest import load_manifest_tasks
+
+    path = __import__("pathlib").Path(__file__).parents[1] / "configs/experiments/multiagentbench_hard_frozen.json"
+    train_hard = load_manifest_tasks(path, split="train_hard")
+    test_hard = load_manifest_tasks(path, split="test_hard")
+
+    assert len(train_hard) == 12
+    assert len(test_hard) == 24
+    assert {t.benchmark for t in train_hard + test_hard} == {"database", "research", "coding"}
+
+    train_keys = {(t.benchmark, t.task_id) for t in train_hard}
+    test_keys = {(t.benchmark, t.task_id) for t in test_hard}
+    assert train_keys.isdisjoint(test_keys)
+
 

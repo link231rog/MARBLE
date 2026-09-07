@@ -16,12 +16,16 @@ def get_split_task_ids(manifest):
     test_db = set(t["task_id"] for t in splits["test"] if t["benchmark"] == "database")
     train_res = set(t["task_id"] for t in splits["train"] if t["benchmark"] == "research")
     test_res = set(t["task_id"] for t in splits["test"] if t["benchmark"] == "research")
+    train_cod = set(t["task_id"] for t in splits["train"] if t["benchmark"] == "coding")
+    test_cod = set(t["task_id"] for t in splits["test"] if t["benchmark"] == "coding")
 
     return {
         ("database", "train"): train_db,
         ("database", "test"): test_db,
         ("research", "train"): train_res,
         ("research", "test"): test_res,
+        ("coding", "train"): train_cod,
+        ("coding", "test"): test_cod,
     }
 
 def main():
@@ -51,7 +55,7 @@ def main():
     print(f"Total Completed Summaries: {len(records)}")
     print("=========================================================================================\n")
 
-    for benchmark in ["database", "research"]:
+    for benchmark in ["database", "research", "coding"]:
         print(f"\n==================== BENCHMARK: {benchmark.upper()} ====================")
         for split_type in ["train", "test"]:
             print(f"\n--- Split: {split_type.upper()} ---")
