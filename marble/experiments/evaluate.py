@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from marble.experiments.task_manifest import read_manifest
 
@@ -261,7 +261,6 @@ def evaluate_memory_trace(
         "format_error_rate": format_error_rate,
         "private": targeted_written,
         "targeted": targeted_written,
-        "targeted_written": targeted_written,
         "global": by_vis.get("global", 0),
         "supersessions": len(superseded_ids),
         "r1_adds": sum(1 for e in r1_operations if e.get("operation") == "ADD"),
@@ -510,7 +509,6 @@ def compute_paired_memory_dependency(
 
 
 def main(argv: List[str] | None = None) -> None:
-    import argparse
     import glob as _glob
 
     parser = argparse.ArgumentParser(description="Evaluate governed-memory baselines.")

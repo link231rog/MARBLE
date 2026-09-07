@@ -4,8 +4,6 @@ import os
 import re
 from typing import Any, Dict
 
-from ruamel.yaml import YAML
-
 from marble.environments.coding_utils.coder import resolve_coding_task
 from marble.llms.model_prompting import model_prompting
 
@@ -167,7 +165,6 @@ def give_advice_and_revise_handler(
         # Step 3: Apply modifications
         modified_code = existing_code
         for mod in strategy["strategies"]:
-            target_code = mod["target"]["code"]
             before_ctx = mod["target"]["before_context"]
             after_ctx = mod["target"]["after_context"]
 

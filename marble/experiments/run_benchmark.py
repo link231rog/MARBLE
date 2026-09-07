@@ -17,7 +17,7 @@ import socket
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 try:
     from dotenv import load_dotenv
@@ -45,7 +45,6 @@ from marble.experiments.baselines import (
     canonical_baseline,
 )
 from marble.experiments.ablations import (
-    apply_to_task_config,
     controller_kwargs,
     parse_ablation,
     reward_override,
@@ -588,7 +587,6 @@ def task_config(
         "relationships": [list(r) for r in task.relationships],
         "environment": dict(task.environment),
         "memory": dict(task.memory),
-        "metrics": dict(task.metrics),
         "engine_planner": dict(task.engine_planner),
         "output": dict(task.output),
         # ponytail: Config reads coordinate_mode (config.py), not coordination_mode
@@ -617,7 +615,6 @@ def task_config(
         if not cfg["agents"]:
             raise ValueError(f"task {task.task_id} has no agents for single_agent baseline")
         chosen = cfg["agents"][0]
-        chosen_id = chosen.get("agent_id")
         cfg["agents"] = [chosen]
         # A single-agent episode has no valid cross-agent targets.
         cfg["relationships"] = []

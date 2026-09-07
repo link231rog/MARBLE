@@ -14,9 +14,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from threading import RLock
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Set
 
-from .rewards import token_count
 from .schema import MemoryCard, MemoryProposal
 from .trace import TraceLogger
 

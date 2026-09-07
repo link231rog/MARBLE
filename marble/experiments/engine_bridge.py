@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Optional
 
-from marble.memory.adapter import distill_proposal_output, make_title
+from marble.memory.adapter import distill_proposal_output
 from marble.memory.governed_memory import GovernedMemory
 from marble.memory.rewards import token_count
 from marble.memory.schema import MemoryProposal, classify_topics
@@ -248,7 +248,7 @@ def build_governed_engine_cls(engine_cls: Any = None, agent_cls: Any = None):
                     env_name = getattr(self.environment, "name", "")
                     if check_consensus(env_name, agents_results):
                         self.logger.info(f"[Consensus] Early exit triggered: consensus reached in {env_name}.")
-                        print(f"[Engine] >>> Early exit triggered: consensus reached across agents!", flush=True)
+                        print("[Engine] >>> Early exit triggered: consensus reached across agents!", flush=True)
                         return False
                     return orig_decide(agents_results)
                 self.planner.decide_next_step = hooked_decide

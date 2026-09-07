@@ -6,13 +6,14 @@ using minimal VRAM (~18GB out of 96GB on H20), and stopping immediately
 afterwards so GPU memory is 100% freed for others.
 """
 
-from contextlib import contextmanager
 import logging
 import os
 import subprocess
 import time
-import urllib.request
 import urllib.error
+import urllib.request
+from contextlib import contextmanager
+from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def is_vllm_alive(endpoint: str = DEFAULT_LOCAL_ENDPOINT, timeout: float = 2.0) 
     try:
         req = urllib.request.Request(models_url, headers={"User-Agent": "MARBLE-HealthCheck"})
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            return response.status == 200
+            return bool(response.status == 200)
     except Exception:
         return False
 
@@ -106,7 +107,7 @@ def on_demand_gpu1_vllm(
     remote_host: str = DEFAULT_REMOTE_HOST,
     tunnel_port: int = DEFAULT_TUNNEL_PORT,
     timeout: int = 75,
-):
+) -> Iterator[str]:
     """Context manager that starts vLLM on gpu1 on enter and ensures it stops on exit."""
     endpoint = start_gpu1_vllm(remote_host=remote_host, tunnel_port=tunnel_port, timeout=timeout)
     try:

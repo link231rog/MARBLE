@@ -65,7 +65,7 @@ def json_parse(input_str: str) -> Dict[str, Any]:
 
     try:
         data = json.loads(json_str)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         # Reasoning models often emit truncated/malformed JSON; degrade to an
         # empty plan (callers .get()) instead of killing the whole episode.
         return {}

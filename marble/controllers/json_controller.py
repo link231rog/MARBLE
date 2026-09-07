@@ -67,7 +67,7 @@ class JsonController:
         example_agent_2 = (
             f'["{agent_ids[0]}", "{agent_ids[1]}"]'
             if len(agent_ids) >= 2
-            else f'["agent_1", "agent_2"]'
+            else '["agent_1", "agent_2"]'
         )
         lines: List[str] = [
             "[SYSTEM]",
@@ -224,7 +224,6 @@ def _resolve_supersedes(
 ) -> Optional[str]:
     if supersedes is None:
         return None
-    wanted = str(supersedes).strip().casefold()
     for it in current_state:
         if not (it.active and it.task_id == proposal.task_id):
             continue

@@ -67,7 +67,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Configure environment variables
-Environment variables such as `OPENAI_API_KEY` and `Together_API_KEY` related configs are required to run the code. The recommended way to set all the required variable is
+Environment variables are required to run benchmarks and simulations (see `.env.template` for required worker, evaluator, and controller keys). The recommended way to set all required variables is
 1. Copy the `.env.template` file into the project root with the name `.env`.
 ```bash
 cp .env.template .env

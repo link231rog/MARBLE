@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
-from .rewards import token_count
 from .schema import MemoryCard, MemoryProposal
 from .trace import TraceLogger
 

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
+import os
+import re
 from typing import List, Optional
 
 from .governed_memory import GovernedMemory
 from .schema import MemoryCard, MemoryProposal, classify_topics
-
-
-import os
-import re
-from typing import Tuple
 
 
 def distill_proposal_output(

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from marble.controllers.local_policy import (
-    VISIBILITIES,
     LocalPolicyController,
     canonical_action,
     features,
