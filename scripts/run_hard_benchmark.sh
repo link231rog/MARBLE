@@ -112,6 +112,16 @@ while [[ $# -gt 0 ]]; do
             OUT_DIR="$2"
             shift 2
             ;;
+        --qwen-api-model)
+            QWEN_API_MODEL="$2"
+            export MARBLE_QWEN_API_MODELS="$2"
+            shift 2
+            ;;
+        --qwen-api-base)
+            QWEN_API_BASE="$2"
+            export MARBLE_QWEN_API_BASES="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown argument: $1"
             exit 1
@@ -153,7 +163,15 @@ if [[ "$BASELINE" =~ ^ours_ ]] && [ "$GPU1_ON_DEMAND" == "1" ]; then
     trap './scripts/gpu1_vllm_ctl.sh stop' EXIT INT TERM
     export MARBLE_QWEN_API_KEYS="EMPTY"
     export MARBLE_QWEN_API_BASES="http://127.0.0.1:18000/v1"
-    export MARBLE_QWEN_API_MODELS="Qwen/Qwen3.5-4B"
+    if [ -z "$QWEN_API_MODEL" ]; then
+        if [ "$BASELINE" == "ours_sft" ]; then
+            export MARBLE_QWEN_API_MODELS="qwen_sft"
+        elif [ "$BASELINE" == "ours_rl" ] || [ "$BASELINE" == "ours_private_to_global" ]; then
+            export MARBLE_QWEN_API_MODELS="qwen_rl"
+        else
+            export MARBLE_QWEN_API_MODELS="Qwen/Qwen3.5-4B"
+        fi
+    fi
 fi
 
 # Parse API keys and endpoints for multi-provider rotation
