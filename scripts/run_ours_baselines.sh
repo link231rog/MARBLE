@@ -80,6 +80,10 @@ for i in "${!BASELINES[@]}"; do
                 EXTRA_FLAGS="--controller-checkpoint $rl_ckpt"
             elif [ -n "${MARBLE_QWEN_RL_MODEL:-}" ]; then
                 EXTRA_FLAGS="--qwen-api-model $MARBLE_QWEN_RL_MODEL"
+            else
+                echo "❌ FATAL: Baseline 'ours_rl' requires a trained checkpoint (runs/checkpoints/qwen_rl) or MARBLE_QWEN_RL_MODEL!" >&2
+                echo "Cannot proceed with silent fallback to untrained base model." >&2
+                exit 1
             fi
             ;;
         ours_sft)
@@ -88,6 +92,10 @@ for i in "${!BASELINES[@]}"; do
                 EXTRA_FLAGS="--controller-checkpoint $sft_ckpt"
             elif [ -n "${MARBLE_QWEN_SFT_MODEL:-}" ]; then
                 EXTRA_FLAGS="--qwen-api-model $MARBLE_QWEN_SFT_MODEL"
+            else
+                echo "❌ FATAL: Baseline 'ours_sft' requires a trained checkpoint (runs/checkpoints/qwen_sft) or MARBLE_QWEN_SFT_MODEL!" >&2
+                echo "Cannot proceed with silent fallback to untrained base model." >&2
+                exit 1
             fi
             ;;
         ours_private_to_global)
@@ -97,7 +105,9 @@ for i in "${!BASELINES[@]}"; do
             elif [ -n "${MARBLE_QWEN_RL_MODEL:-}" ]; then
                 EXTRA_FLAGS="--qwen-api-model $MARBLE_QWEN_RL_MODEL --ablation visibility:private_to_global"
             else
-                EXTRA_FLAGS="--ablation visibility:private_to_global"
+                echo "❌ FATAL: Baseline 'ours_private_to_global' requires a trained checkpoint (runs/checkpoints/qwen_rl) or MARBLE_QWEN_RL_MODEL!" >&2
+                echo "Cannot proceed with silent fallback to untrained base model." >&2
+                exit 1
             fi
             ;;
         ours_linear_rl|learned_controller)

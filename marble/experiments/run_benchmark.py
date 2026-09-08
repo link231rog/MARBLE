@@ -195,10 +195,32 @@ def make_controller(
             or "Qwen/Qwen3.5-4B"
         )
         api_base = qwen_api_base or os.environ.get("MARBLE_QWEN_API_BASE")
+        effective_api_model = (
+            qwen_api_model
+            or os.environ.get("MARBLE_QWEN_API_MODEL")
+        )
+
+        # Strict validation for trained Qwen variants: ours_sft, ours_rl, ours_private_to_global
+        if baseline in ("ours_sft", "ours_rl", "ours_private_to_global"):
+            has_ckpt = bool(controller_checkpoint and str(controller_checkpoint).strip())
+            has_served_adapter = bool(
+                effective_api_model
+                and effective_api_model != base_model
+                and effective_api_model != "Qwen/Qwen3.5-4B"
+            )
+            if not (has_ckpt or has_served_adapter):
+                raise ValueError(
+                    f"Fatal configuration error for baseline '{baseline}': "
+                    f"Trained baseline '{baseline}' requires a trained LoRA adapter checkpoint directory "
+                    f"(--controller-checkpoint) or a dedicated served adapter model name (--qwen-api-model). "
+                    f"Got controller_checkpoint='{controller_checkpoint}' and qwen_api_model='{effective_api_model}'. "
+                    "Silent fallback to zero-shot base model (adapter=none) is strictly prohibited!"
+                )
+
         if api_base:
             if controller_checkpoint:
                 # Fast-fail: remote endpoints cannot access local filesystem LoRA adapter directories!
-                if not (qwen_api_model and qwen_api_model == Path(controller_checkpoint).name):
+                if not (effective_api_model and effective_api_model == Path(controller_checkpoint).name):
                     raise ValueError(
                         f"Fatal checkpoint conflict for baseline '{baseline}': "
                         f"--controller-checkpoint '{controller_checkpoint}' was provided, "
@@ -221,9 +243,7 @@ def make_controller(
             generate_fn = api_generate_fn(
                 api_base,
                 api_key,
-                qwen_api_model
-                or os.environ.get("MARBLE_QWEN_API_MODEL")
-                or base_model,
+                effective_api_model or base_model,
             )
         else:
             if not controller_checkpoint:
@@ -278,17 +298,19 @@ def describe_controller(
         if controller_checkpoint and str(controller_checkpoint).endswith(".json"):
             desc = f"local_policy(linear;{Path(controller_checkpoint).name})"
         else:
-            model_name = (
-                qwen_api_model
-                or qwen_base_model
+            base_m = (
+                qwen_base_model
                 or os.environ.get("MARBLE_QWEN_BASE_MODEL")
                 or "Qwen/Qwen3.5-4B"
             )
-            # Ensure truth in advertising: if running via remote API base without explicit served adapter, adapter is none
-            if qwen_api_base and not (controller_checkpoint and qwen_api_model == Path(controller_checkpoint).name):
-                adapter = "none"
+            api_m = qwen_api_model or os.environ.get("MARBLE_QWEN_API_MODEL")
+            model_name = api_m or base_m
+            if controller_checkpoint:
+                adapter = Path(controller_checkpoint).name
+            elif api_m and api_m != base_m and api_m != "Qwen/Qwen3.5-4B":
+                adapter = api_m
             else:
-                adapter = Path(controller_checkpoint).name if controller_checkpoint else "none"
+                adapter = "none"
             prefix = "qwen_rl" if spec.controller == "qwen_rl" else "qwen_sft"
             desc = f"{prefix}(model={model_name};adapter={adapter})"
     else:

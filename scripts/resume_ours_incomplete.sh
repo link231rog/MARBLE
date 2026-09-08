@@ -72,6 +72,10 @@ for entry in "${RUN_DIRS[@]}"; do
                 EXTRA_FLAGS="--controller-checkpoint $rl_ckpt"
             elif [ -n "${MARBLE_QWEN_RL_MODEL:-}" ]; then
                 EXTRA_FLAGS="--qwen-api-model $MARBLE_QWEN_RL_MODEL"
+            else
+                echo "❌ FATAL: Baseline 'ours_rl' requires a trained checkpoint (runs/checkpoints/qwen_rl) or MARBLE_QWEN_RL_MODEL!" >&2
+                echo "Cannot proceed with silent fallback to untrained base model." >&2
+                exit 1
             fi
             ;;
         ours_sft)
@@ -80,6 +84,10 @@ for entry in "${RUN_DIRS[@]}"; do
                 EXTRA_FLAGS="--controller-checkpoint $sft_ckpt"
             elif [ -n "${MARBLE_QWEN_SFT_MODEL:-}" ]; then
                 EXTRA_FLAGS="--qwen-api-model $MARBLE_QWEN_SFT_MODEL"
+            else
+                echo "❌ FATAL: Baseline 'ours_sft' requires a trained checkpoint (runs/checkpoints/qwen_sft) or MARBLE_QWEN_SFT_MODEL!" >&2
+                echo "Cannot proceed with silent fallback to untrained base model." >&2
+                exit 1
             fi
             ;;
     esac

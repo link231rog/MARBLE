@@ -134,6 +134,7 @@ def test_qwen_rl_schema_field_ablation_passes_drop_fields(monkeypatch):
         "qwen_rl",
         qwen_api_base="https://example/v1",
         qwen_api_key="k",
+        qwen_api_model="qwen-rl",
         ablation="schema_field:title",
     )
     assert seen["drop_fields"] == ("title",)
@@ -763,6 +764,44 @@ def test_baseline_aliases_for_linear_policy(tmp_path):
     for name in ("local_policy", "linear_policy", "ours_linear_sft", "ours_linear_rl"):
         ctrl = make_controller(name, controller_checkpoint=str(p))
         assert isinstance(ctrl, LocalPolicyController)
+
+
+def test_make_controller_rejects_missing_checkpoint_for_trained_qwen_variants(monkeypatch):
+    import pytest
+
+    # Ensure env does not provide a custom adapter
+    monkeypatch.delenv("MARBLE_QWEN_API_MODEL", raising=False)
+    monkeypatch.setenv("MARBLE_QWEN_BASE_MODEL", "Qwen/Qwen3.5-4B")
+
+    # ours_sft and ours_rl must fail fast if no checkpoint / custom served adapter is provided
+    for b in ("ours_sft", "ours_rl", "ours_private_to_global"):
+        with pytest.raises(ValueError, match="Fatal configuration error for baseline"):
+            make_controller(b)
+
+    # ours_base is allowed to run without checkpoint (zero-shot base)
+    # mock api_generate_fn to avoid actual network call
+    monkeypatch.setattr("marble.controllers.qwen_lora.api_generate_fn", lambda *args, **kwargs: (lambda p: '{"visibility": "absent"}'))
+    ctrl = make_controller("ours_base", qwen_api_base="http://fake", qwen_api_key="fake")
+    assert ctrl is not None
+
+
+def test_describe_controller_shows_correct_adapter(tmp_path):
+    from marble.experiments.run_benchmark import describe_controller
+
+    # Base model has adapter=none
+    desc_base = describe_controller("ours_base")
+    assert "adapter=none" in desc_base
+
+    # SFT with checkpoint has adapter=qwen_sft
+    sft_dir = tmp_path / "qwen_sft"
+    sft_dir.mkdir()
+    desc_sft = describe_controller("ours_sft", controller_checkpoint=str(sft_dir))
+    assert "adapter=qwen_sft" in desc_sft
+
+    # RL with served adapter has adapter=qwen_rl
+    desc_rl = describe_controller("ours_rl", qwen_api_model="qwen_rl")
+    assert "adapter=qwen_rl" in desc_rl
+
 
 
 
