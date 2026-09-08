@@ -857,7 +857,7 @@ def run_task(
     if completed.exists():
         try:
             previous = json.loads(completed.read_text(encoding="utf-8"))
-            status_ok = previous.get("status") in {"ok", "score_unavailable"}
+            status_ok = previous.get("status") == "ok"
             if "setting" in previous:
                 setting_ok = previous["setting"] == summary["setting"]
             else:
