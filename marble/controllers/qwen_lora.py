@@ -295,7 +295,7 @@ def completion_only_collator(
             dtype=torch.long,
         ),
         "sample_weight": torch.tensor(
-            [feature["sample_weight"] for feature in features],
+            [feature.get("sample_weight", 1.0) for feature in features],
             dtype=torch.float,
         ),
     }
@@ -527,6 +527,7 @@ def train_qwen_sft(
     args = TrainingArguments(
         output_dir=out_dir, num_train_epochs=epochs, learning_rate=lr,
         per_device_train_batch_size=1, logging_steps=1, save_strategy="no",
+        remove_unused_columns=False,
         report_to=[],
     )
     trainer = _WeightedTrainer(
