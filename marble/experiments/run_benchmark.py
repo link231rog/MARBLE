@@ -732,7 +732,7 @@ def run_task(
     beta: float = 0.25,
     manifest: Optional[str] = None,
     provider: Optional[str] = None,
-    task_timeout: Optional[float] = 900.0,
+    task_timeout: Optional[float] = 0.0,
     enable_comm_governor: bool = False,
 ) -> Dict[str, Any]:
     if lambda_ < 0:
@@ -1409,8 +1409,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--task-timeout",
         type=float,
-        default=float(os.environ.get("MARBLE_TASK_TIMEOUT", "900.0")),
-        help="max execution time in seconds per task before raising timeout (default: 900.0)",
+        default=float(os.environ.get("MARBLE_TASK_TIMEOUT", "0.0")),
+        help="max execution time in seconds per task before raising timeout (0 or <=0 to disable timeout, default: 0.0)",
     )
     ap.add_argument(
         "--enable-comm-governor",

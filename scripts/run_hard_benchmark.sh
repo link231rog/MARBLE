@@ -39,10 +39,15 @@ ABLATION=""
 
 PORT_OFFSET=0
 GPU1_ON_DEMAND="${MARBLE_GPU1_ON_DEMAND:-0}"
+TASK_TIMEOUT="${TASK_TIMEOUT:-0}"
 
 # Parse CLI options
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --task-timeout)
+            TASK_TIMEOUT="$2"
+            shift 2
+            ;;
         --gpu1-on-demand)
             GPU1_ON_DEMAND="1"
             shift 1
@@ -269,7 +274,7 @@ launch_db_worker() {
                 --max-cards "$MAX_CARDS" \
                 --lambda "$LAMBDA" \
                 --beta "$BETA" \
-                --task-timeout 1800 \
+                --task-timeout "$TASK_TIMEOUT" \
                 $EXTRA_ARGS \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"; then
                 echo "[DB Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
@@ -286,7 +291,7 @@ launch_db_worker() {
                     --max-cards "$MAX_CARDS" \
                     --lambda "$LAMBDA" \
                     --beta "$BETA" \
-                    --task-timeout 1800 \
+                    --task-timeout "$TASK_TIMEOUT" \
                     $EXTRA_ARGS \
                     --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log" || true
             fi
@@ -333,7 +338,7 @@ launch_research_worker() {
                 --max-cards "$MAX_CARDS" \
                 --lambda "$LAMBDA" \
                 --beta "$BETA" \
-                --task-timeout 1800 \
+                --task-timeout "$TASK_TIMEOUT" \
                 $EXTRA_ARGS \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"; then
                 echo "[Research Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
@@ -350,7 +355,7 @@ launch_research_worker() {
                     --max-cards "$MAX_CARDS" \
                     --lambda "$LAMBDA" \
                     --beta "$BETA" \
-                    --task-timeout 1800 \
+                    --task-timeout "$TASK_TIMEOUT" \
                     $EXTRA_ARGS \
                     --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log" || true
             fi
@@ -397,7 +402,7 @@ launch_coding_worker() {
                 --max-cards "$MAX_CARDS" \
                 --lambda "$LAMBDA" \
                 --beta "$BETA" \
-                --task-timeout 1800 \
+                --task-timeout "$TASK_TIMEOUT" \
                 $EXTRA_ARGS \
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/coding_task_${task_id}_w${worker_id}.log"; then
                 echo "[Coding Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
@@ -414,7 +419,7 @@ launch_coding_worker() {
                     --max-cards "$MAX_CARDS" \
                     --lambda "$LAMBDA" \
                     --beta "$BETA" \
-                    --task-timeout 1800 \
+                    --task-timeout "$TASK_TIMEOUT" \
                     $EXTRA_ARGS \
                     --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/coding_task_${task_id}_w${worker_id}.log" || true
             fi

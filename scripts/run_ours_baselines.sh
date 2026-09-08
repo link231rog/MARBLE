@@ -55,11 +55,14 @@ for i in "${!BASELINES[@]}"; do
     done_run=""
     target_worker="gpt-oss-20b"
     for r in runs/hard_${b}_${SPLIT}_c${CONCURRENCY}_*; do
-        if [ -d "$r" ] && [ $(find "$r" -name "summary.json" 2>/dev/null | wc -l) -ge 24 ]; then
-            first_sum=$(find "$r" -name "summary.json" 2>/dev/null | head -n 1)
-            if [ -n "$first_sum" ] && grep -q "$target_worker" "$first_sum"; then
-                done_run="$r"
-                break
+        if [ -d "$r" ]; then
+            ok_count=$(find "$r" -name "summary.json" -exec grep -l '"status": "ok"' {} + 2>/dev/null | wc -l || true)
+            if [ "$ok_count" -ge 24 ]; then
+                first_sum=$(find "$r" -name "summary.json" 2>/dev/null | head -n 1)
+                if [ -n "$first_sum" ] && grep -q "$target_worker" "$first_sum"; then
+                    done_run="$r"
+                    break
+                fi
             fi
         fi
     done
