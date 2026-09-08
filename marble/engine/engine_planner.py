@@ -42,10 +42,7 @@ def json_parse(input_str: str) -> Dict[str, Any]:
             ```
 
     Returns:
-        Dict[str, Any]: The parsed JSON data as a dictionary.
-
-    Raises:
-        ValueError: If JSON parsing fails due to invalid format.
+        Dict[str, Any]: The parsed JSON data as a dictionary, or {} if parsing fails.
     """
     # Regular expression to match the content between ```json and ```
     pattern = r"```json\s*(\{.*?\})\s*```"

@@ -15,9 +15,20 @@ def _configured_wait_time(env_name: str, fallback: float) -> float:
         return fallback
     try:
         wait_time = float(raw_value)
-    except ValueError:
+    except (ValueError, TypeError):
         return fallback
     return wait_time if wait_time >= 0 else fallback
+
+
+def _configured_int(env_name: str, fallback: int) -> int:
+    raw_value = os.environ.get(env_name)
+    if raw_value is None:
+        return fallback
+    try:
+        val = int(raw_value)
+    except (ValueError, TypeError):
+        return fallback
+    return val if val >= 0 else fallback
 
 
 def _is_rate_limit_error(error: Exception) -> bool:
@@ -62,7 +73,7 @@ def api_calling_error_exponential_backoff(
                 modified_base_wait_time = 1
                 modified_rate_limit_base_wait_time = 1
             else:
-                modified_retries = int(os.environ.get("MARBLE_API_RETRIES", str(retries)))
+                modified_retries = _configured_int("MARBLE_API_RETRIES", retries)
                 modified_base_wait_time = base_wait_time
                 modified_rate_limit_base_wait_time = rate_limit_base_wait_time
                 if modified_rate_limit_base_wait_time is None:
@@ -72,7 +83,7 @@ def api_calling_error_exponential_backoff(
 
             attempts = 0
             last_exc: Optional[Exception] = None
-            max_429_retries = int(os.environ.get("MARBLE_API_429_MAX_RETRIES", "100"))
+            max_429_retries = _configured_int("MARBLE_API_429_MAX_RETRIES", 100)
             while True:
                 try:
                     return func(*args, **kwargs)

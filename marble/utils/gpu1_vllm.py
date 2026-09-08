@@ -72,8 +72,8 @@ def start_gpu1_vllm(
         return endpoint
 
     logger.info(f"Starting minimal VRAM vLLM on {remote_host}...")
-    start_cmd = f"ssh -o ConnectTimeout=10 {remote_host} 'bash /data/home/huangzixuan/start_vllm_minimal.sh'"
-    res = subprocess.run(start_cmd, shell=True, capture_output=True, text=True)
+    start_cmd = ["ssh", "-o", "ConnectTimeout=10", remote_host, "bash /data/home/huangzixuan/start_vllm_minimal.sh"]
+    res = subprocess.run(start_cmd, capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError(f"Failed to trigger start_vllm_minimal.sh on {remote_host}: {res.stderr}")
 
@@ -94,9 +94,9 @@ def start_gpu1_vllm(
 def stop_gpu1_vllm(remote_host: str = DEFAULT_REMOTE_HOST) -> None:
     """Stop vLLM on gpu1 immediately to release 100% of GPU memory."""
     logger.info(f"Stopping vLLM on {remote_host} to free GPU memory...")
-    stop_cmd = f"ssh -o ConnectTimeout=10 {remote_host} 'bash /data/home/huangzixuan/stop_vllm.sh'"
+    stop_cmd = ["ssh", "-o", "ConnectTimeout=10", remote_host, "bash /data/home/huangzixuan/stop_vllm.sh"]
     try:
-        subprocess.run(stop_cmd, shell=True, capture_output=True, text=True, timeout=15)
+        subprocess.run(stop_cmd, capture_output=True, text=True, timeout=15)
         logger.info(f"vLLM on {remote_host} stopped successfully.")
     except Exception as e:
         logger.warning(f"Error stopping vLLM on {remote_host}: {e}")

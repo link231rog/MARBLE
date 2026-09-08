@@ -15,7 +15,7 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-UV="/Users/huangzixuan/.local/bin/uv"
+UV="${UV:-$(command -v uv || echo "uv")}"
 SPLIT="test"
 
 cleanup_docker() {

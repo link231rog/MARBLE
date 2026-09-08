@@ -12,12 +12,12 @@ class TestTextEmbedding(unittest.TestCase):
         mock_litellm_embedding.return_value = mock_resp
 
         content = "This is a test sentence."
-        emebedding = text_embedding(
+        embedding = text_embedding(
             model="text-embedding-3-small",
             input=content,
         )
-        self.assertIsInstance(emebedding, list)
-        for entry in emebedding:
+        self.assertIsInstance(embedding, list)
+        for entry in embedding:
             self.assertIsInstance(entry, float)
 
 

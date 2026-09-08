@@ -29,6 +29,22 @@ class TestApiCallingBackoff(unittest.TestCase):
         sleep_arg = sleep.call_args[0][0]
         self.assertGreaterEqual(sleep_arg, 60.0)
 
+    def test_invalid_retries_env_falls_back_to_default(self) -> None:
+        calls = 0
+
+        @api_calling_error_exponential_backoff(retries=2, base_wait_time=1)
+        def faulty_func() -> str:
+            nonlocal calls
+            calls += 1
+            if calls < 2:
+                raise ValueError("temporary error")
+            return "recovered"
+
+        with patch.dict(os.environ, {"MARBLE_API_RETRIES": "invalid-int"}):
+            with patch("marble.llms.error_handler.time.sleep"):
+                self.assertEqual(faulty_func(), "recovered")
+        self.assertEqual(calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,7 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-UV="/Users/huangzixuan/.local/bin/uv"
+UV="${UV:-$(command -v uv || echo "uv")}"
 SPLIT="test"
 CKPT="runs/ours_rl_policy.json"
 
