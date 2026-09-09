@@ -106,8 +106,9 @@ def evaluate_memory_trace(
     events: List[Dict[str, Any]],
     task_success: Optional[Any] = None,
     task_score: Optional[float] = None,
+    advantage: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Memory metrics from one memory_trace.jsonl (spec §13, §12.7.3)."""
+    """Memory metrics from one memory_trace.jsonl (spec §13, §12.7.3, Chapter 6)."""
     decisions = [e for e in events if e.get("event") == "memory_decision"]
     r1_operations = [
         e for e in events if e.get("event") in (
@@ -239,14 +240,60 @@ def evaluate_memory_trace(
         if owners.get(mid) and owners.get(mid) != e.get("reader_id")
     )
 
-    if task_success is not None:
+    if advantage is not None:
+        traj_positive = float(advantage) > 0
+        traj_harmful = float(advantage) < 0
+    elif task_success is not None:
         is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 1.0)
+        traj_positive = is_success
+        traj_harmful = not is_success
     elif task_score is not None:
         is_success = (float(task_score) >= 1.0)
+        traj_positive = is_success
+        traj_harmful = not is_success
     else:
-        is_success = True
+        traj_positive = True
+        traj_harmful = False
 
-    negative_transfer = cross if not is_success else 0
+    productive_cross_reads = 0
+    harmful_cross_reads = 0
+
+    for idx, e in enumerate(events):
+        if e.get("event") != "memory_read":
+            continue
+        mid = e.get("memory_id")
+        reader = e.get("reader_id")
+        author = owners.get(mid)
+        if not mid or not reader or not author or author == reader:
+            continue
+
+        has_subsequent = False
+        if idx < len(events) - 1:
+            for sub_e in events[idx + 1:]:
+                sub_agent = (
+                    sub_e.get("agent_id")
+                    or (sub_e.get("proposal") or {}).get("agent_id")
+                    or (sub_e.get("reader_id") if sub_e.get("event") != "memory_read" else None)
+                )
+                if sub_agent == reader:
+                    has_subsequent = True
+                    break
+        else:
+            has_subsequent = True
+
+        if has_subsequent and traj_positive:
+            productive_cross_reads += 1
+        if traj_harmful:
+            harmful_cross_reads += 1
+
+    productive_cross_read_rate = (
+        (productive_cross_reads / cross) if cross > 0 else 0.0
+    )
+    harmful_cross_read_rate = (
+        (harmful_cross_reads / cross) if cross > 0 else 0.0
+    )
+    # Chapter 6: Negative transfer defined as harmful_cross_reads / all_cross_reads
+    negative_transfer = harmful_cross_read_rate
 
     return {
         "decisions_total": total,
@@ -275,6 +322,10 @@ def evaluate_memory_trace(
         ),
         "reads": len(reads),
         "cross_agent_reads": cross,
+        "productive_cross_reads": productive_cross_reads,
+        "productive_cross_read_rate": productive_cross_read_rate,
+        "harmful_cross_reads": harmful_cross_reads,
+        "harmful_cross_read_rate": harmful_cross_read_rate,
         "reuse_rate": read_coverage,
         "read_coverage": read_coverage,
         "cross_agent_read_coverage": cross_agent_read_coverage,
@@ -307,10 +358,12 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         summary = json.load(fh)
     task_success_val = summary.get("task_success")
     task_score_val = summary.get("task_score", 0.0)
+    advantage_val = summary.get("advantage") or summary.get("norm_advantage")
     memory_metrics = evaluate_memory_trace(
         _read_jsonl(os.path.join(task_dir, "memory_trace.jsonl")),
         task_success=task_success_val,
         task_score=task_score_val,
+        advantage=advantage_val,
     )
     row: Dict[str, Any] = {
         "method": summary.get("method"),
@@ -351,7 +404,11 @@ def evaluate_task_dir(task_dir: str | os.PathLike) -> Dict[str, Any]:
         "global_non_owner_reuse": memory_metrics.get("global_non_owner_reuse", 0),
         "cross_agent_exposure": memory_metrics.get("cross_agent_exposure", 0),
         "cross_agent_reads": memory_metrics.get("cross_agent_reads", 0),
-        "negative_transfer": memory_metrics.get("negative_transfer", 0),
+        "productive_cross_reads": memory_metrics.get("productive_cross_reads", 0),
+        "productive_cross_read_rate": memory_metrics.get("productive_cross_read_rate", 0.0),
+        "harmful_cross_reads": memory_metrics.get("harmful_cross_reads", 0),
+        "harmful_cross_read_rate": memory_metrics.get("harmful_cross_read_rate", 0.0),
+        "negative_transfer": memory_metrics.get("negative_transfer", 0.0),
         "memory": memory_metrics,
     }
     reward_path = os.path.join(task_dir, "reward.json")

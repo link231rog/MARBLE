@@ -137,6 +137,8 @@ def aggregate_runs(
         mem_counts = []
         priv_reads = []
         cross_reads = []
+        prod_cross_reads = []
+        prod_cross_rates = []
         total_reads = []
         reuse_rates = []
         neg_transfers = []
@@ -152,6 +154,12 @@ def aggregate_runs(
             cr = mm.get("cross_agent_reads", 0)
             cross_reads.append(cr)
 
+            pcr = mm.get("productive_cross_reads", 0)
+            prod_cross_reads.append(pcr)
+
+            pcr_rate = mm.get("productive_cross_read_rate", 0.0)
+            prod_cross_rates.append(pcr_rate)
+
             reads = mm.get("reads", 0)
             total_reads.append(reads)
 
@@ -161,7 +169,12 @@ def aggregate_runs(
             rr = mm.get("reuse_rate", 0.0)
             reuse_rates.append(rr)
 
-            neg_transfers.append(cr if not is_success else 0)
+            if "negative_transfer" in mm:
+                neg_transfers.append(float(mm["negative_transfer"]))
+            elif "negative_transfer" in r:
+                neg_transfers.append(float(r["negative_transfer"]))
+            else:
+                neg_transfers.append(1.0 if (not is_success and cr > 0) else 0.0)
 
             cm = r.get("controller_model") or r.get("controller") or ""
             if cm:
@@ -178,6 +191,8 @@ def aggregate_runs(
             "active_memories": sum(mem_counts) / n,
             "private_reads": sum(priv_reads) / n,
             "cross_reads": sum(cross_reads) / n,
+            "productive_cross_reads": sum(prod_cross_reads) / n,
+            "useful_transfer_pct": (sum(prod_cross_rates) / n) * 100.0,
             "reuse_rate_pct": (sum(reuse_rates) / n) * 100.0 if any(reuse_rates) else 0.0,
             "negative_transfer": sum(neg_transfers) / n,
             "net_reward": sum(rewards) / n,

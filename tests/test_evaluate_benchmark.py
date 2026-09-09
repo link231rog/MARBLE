@@ -359,3 +359,52 @@ def test_trace_metrics_targeted_memory_evaluation():
     assert metrics["cross_agent_reads"] == 1
 
 
+def test_trace_metrics_productive_cross_reads_and_negative_transfer():
+    """Chapter 6: Productive cross reads require reader action and positive advantage; negative transfer is ratio."""
+    # Case 1: Active cross-read with positive advantage -> productive
+    events_active = [
+        _decision("m1", "a1", "global"),
+        _read("m1", "a2"),
+        _decision("m2", "a2", "global"),  # a2 takes subsequent action!
+    ]
+    m_pos = evaluate_memory_trace(events_active, task_success=1.0, advantage=0.8)
+    assert m_pos["cross_agent_reads"] == 1
+    assert m_pos["productive_cross_reads"] == 1
+    assert m_pos["productive_cross_read_rate"] == 1.0
+    assert m_pos["harmful_cross_reads"] == 0
+    assert m_pos["negative_transfer"] == 0.0
+
+    # Case 2: Active cross-read with negative advantage -> harmful transfer
+    m_neg = evaluate_memory_trace(events_active, task_success=0.0, advantage=-0.5)
+    assert m_neg["cross_agent_reads"] == 1
+    assert m_neg["productive_cross_reads"] == 0
+    assert m_neg["productive_cross_read_rate"] == 0.0
+    assert m_neg["harmful_cross_reads"] == 1
+    assert m_neg["negative_transfer"] == 1.0
+
+    # Case 3: Dead read (reader takes no subsequent action) even if task succeeds
+    events_dead = [
+        _decision("m1", "a1", "global"),
+        _read("m1", "a2"),
+        _decision("m3", "a1", "global"),  # only a1 acts, a2 is silent
+    ]
+    m_dead = evaluate_memory_trace(events_dead, task_success=1.0, advantage=0.8)
+    assert m_dead["cross_agent_reads"] == 1
+    assert m_dead["productive_cross_reads"] == 0
+    assert m_dead["productive_cross_read_rate"] == 0.0
+    assert m_dead["negative_transfer"] == 0.0
+
+    # Case 4: No cross reads at all -> negative transfer is 0.0, productive rate is 0.0
+    events_none = [
+        _decision("m1", "a1", "global"),
+        _read("m1", "a1"),  # owner read
+    ]
+    m_none = evaluate_memory_trace(events_none, task_success=0.0, advantage=-1.0)
+    assert m_none["cross_agent_reads"] == 0
+    assert m_none["productive_cross_reads"] == 0
+    assert m_none["productive_cross_read_rate"] == 0.0
+    assert m_none["harmful_cross_reads"] == 0
+    assert m_none["negative_transfer"] == 0.0
+
+
+

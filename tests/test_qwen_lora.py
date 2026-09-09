@@ -314,7 +314,7 @@ def test_load_qwen_rl_samples_uses_same_task_memory_credit(tmp_path):
         {
             "event": "memory_decision",
             "controller_prompt": "second prompt",
-            "proposal": {"task_id": "same", "agent_id": "a", "raw_value": "ignored"},
+            "proposal": {"task_id": "same", "agent_id": "b", "raw_value": "ignored"},
             "target": {"visibility": "global", "supersedes": None},
         },
     ]

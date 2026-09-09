@@ -30,7 +30,7 @@ MAX_CARDS=5
 MAX_ITERATIONS=5
 CONCURRENCY="${CONCURRENCY:-8}"
 ENABLE_COMM_GOV=""
-DRY_RUN=""
+DRY_RUN="${DRY_RUN:-}"
 OUT_DIR=""
 CONTROLLER_CHECKPOINT=""
 LAMBDA="0.15"
@@ -38,6 +38,7 @@ BETA="0.25"
 ABLATION=""
 
 PORT_OFFSET=0
+SEED="42"
 GPU1_ON_DEMAND="${MARBLE_GPU1_ON_DEMAND:-0}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-0}"
 
@@ -112,6 +113,10 @@ while [[ $# -gt 0 ]]; do
             OUT_DIR="$2"
             shift 2
             ;;
+        --seed)
+            SEED="$2"
+            shift 2
+            ;;
         --qwen-api-model)
             QWEN_API_MODEL="$2"
             export MARBLE_QWEN_API_MODELS="$2"
@@ -156,7 +161,6 @@ echo "  Port Offset: $PORT_OFFSET"
 echo "  Output Dir:  $OUT_DIR"
 [ -n "$CONTROLLER_CHECKPOINT" ] && echo "  Checkpoint:  $CONTROLLER_CHECKPOINT"
 [ -n "$ABLATION" ] && echo "  Ablation:    $ABLATION"
-# On-demand vLLM lifecycle on cis_gpu1 for 'ours_*' baselines
 # Robust vLLM endpoint resolution for 'ours_*' baselines
 if [[ "$BASELINE" =~ ^ours_ ]]; then
     TARGET_BASE="${QWEN_API_BASE:-http://127.0.0.1:18000/v1}"
@@ -289,6 +293,9 @@ launch_db_worker() {
         [ -n "$ENABLE_COMM_GOV" ] && EXTRA_ARGS="$EXTRA_ARGS $ENABLE_COMM_GOV"
         [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_ARGS="$EXTRA_ARGS --controller-checkpoint $CONTROLLER_CHECKPOINT"
         [ -n "$ABLATION" ] && EXTRA_ARGS="$EXTRA_ARGS --ablation $ABLATION"
+        [ -n "$q_base" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-base $q_base"
+        [ -n "$q_model" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-model $q_model"
+        [ -n "$q_key" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-key $q_key"
 
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))
@@ -309,7 +316,7 @@ launch_db_worker() {
                 --split "$SPLIT" \
                 --task-ids "$task_id" \
                 --baseline "$BASELINE" \
-                --seed 42 \
+                --seed "$SEED" \
                 --max-iterations "$MAX_ITERATIONS" \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
@@ -326,7 +333,7 @@ launch_db_worker() {
                     --split "$SPLIT" \
                     --task-ids "$task_id" \
                     --baseline "$BASELINE" \
-                    --seed 42 \
+                    --seed "$SEED" \
                     --max-iterations "$MAX_ITERATIONS" \
                     --retrieval visible_k \
                     --max-cards "$MAX_CARDS" \
@@ -338,7 +345,7 @@ launch_db_worker() {
             fi
         fi
         echo "[DB Worker $worker_id] Finished DB Task $task_id."
-    ) &
+    )
 }
 
 launch_research_worker() {
@@ -359,6 +366,9 @@ launch_research_worker() {
         [ -n "$ENABLE_COMM_GOV" ] && EXTRA_ARGS="$EXTRA_ARGS $ENABLE_COMM_GOV"
         [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_ARGS="$EXTRA_ARGS --controller-checkpoint $CONTROLLER_CHECKPOINT"
         [ -n "$ABLATION" ] && EXTRA_ARGS="$EXTRA_ARGS --ablation $ABLATION"
+        [ -n "$q_base" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-base $q_base"
+        [ -n "$q_model" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-model $q_model"
+        [ -n "$q_key" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-key $q_key"
 
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))
@@ -373,7 +383,7 @@ launch_research_worker() {
                 --split "$SPLIT" \
                 --task-ids "$task_id" \
                 --baseline "$BASELINE" \
-                --seed 42 \
+                --seed "$SEED" \
                 --max-iterations "$MAX_ITERATIONS" \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
@@ -390,7 +400,7 @@ launch_research_worker() {
                     --split "$SPLIT" \
                     --task-ids "$task_id" \
                     --baseline "$BASELINE" \
-                    --seed 42 \
+                    --seed "$SEED" \
                     --max-iterations "$MAX_ITERATIONS" \
                     --retrieval visible_k \
                     --max-cards "$MAX_CARDS" \
@@ -402,7 +412,7 @@ launch_research_worker() {
             fi
         fi
         echo "[Research Worker $worker_id] Finished Research Task $task_id."
-    ) &
+    )
 }
 
 launch_coding_worker() {
@@ -423,6 +433,9 @@ launch_coding_worker() {
         [ -n "$ENABLE_COMM_GOV" ] && EXTRA_ARGS="$EXTRA_ARGS $ENABLE_COMM_GOV"
         [ -n "$CONTROLLER_CHECKPOINT" ] && EXTRA_ARGS="$EXTRA_ARGS --controller-checkpoint $CONTROLLER_CHECKPOINT"
         [ -n "$ABLATION" ] && EXTRA_ARGS="$EXTRA_ARGS --ablation $ABLATION"
+        [ -n "$q_base" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-base $q_base"
+        [ -n "$q_model" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-model $q_model"
+        [ -n "$q_key" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-key $q_key"
 
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))
@@ -437,7 +450,7 @@ launch_coding_worker() {
                 --split "$SPLIT" \
                 --task-ids "$task_id" \
                 --baseline "$BASELINE" \
-                --seed 42 \
+                --seed "$SEED" \
                 --max-iterations "$MAX_ITERATIONS" \
                 --retrieval visible_k \
                 --max-cards "$MAX_CARDS" \
@@ -454,7 +467,7 @@ launch_coding_worker() {
                     --split "$SPLIT" \
                     --task-ids "$task_id" \
                     --baseline "$BASELINE" \
-                    --seed 42 \
+                    --seed "$SEED" \
                     --max-iterations "$MAX_ITERATIONS" \
                     --retrieval visible_k \
                     --max-cards "$MAX_CARDS" \
@@ -466,94 +479,93 @@ launch_coding_worker() {
             fi
         fi
         echo "[Coding Worker $worker_id] Finished Coding Task $task_id."
-    ) &
+    )
 }
 
 # ------------------------------------------------------------------------------
 # Execution Flow
 # ------------------------------------------------------------------------------
-if [ "$BENCHMARK_TARGET" == "all" ] && [ "$CONCURRENCY" -ge 24 ]; then
-    echo "======================================================================"
-    echo "🚀 [24-Concurrency Simultaneous Mode] Launching Database, Research & Coding ALL IN PARALLEL!"
-    echo "  Database Workers (0..$(( ${#DB_TASKS[@]} - 1 ))):       ${DB_TASKS[*]}"
-    echo "  Research Workers ($(( ${#DB_TASKS[@]} ))..$(( ${#DB_TASKS[@]} + ${#RESEARCH_TASKS[@]} - 1 ))):      ${RESEARCH_TASKS[*]}"
-    echo "  Coding Workers   ($(( ${#DB_TASKS[@]} + ${#RESEARCH_TASKS[@]} ))..$(( ${#DB_TASKS[@]} + ${#RESEARCH_TASKS[@]} + ${#CODING_TASKS[@]} - 1 ))):     ${CODING_TASKS[*]}"
-    echo "======================================================================"
-    PIDS=()
-    for i in "${!DB_TASKS[@]}"; do
-        launch_db_worker "${DB_TASKS[$i]}" "$i"
-        PIDS+=($!)
+echo "======================================================================"
+echo "🚀 [Dynamic Worker Pool Mode] Launching across $CONCURRENCY parallel worker slots!"
+echo "======================================================================"
+
+QUEUE_FILE="$OUT_DIR/.task_queue"
+mkdir -p "$OUT_DIR"
+> "$QUEUE_FILE"
+
+# Enqueue all tasks: Database, Research, Coding
+if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
+    for tid in "${DB_TASKS[@]}"; do
+        echo "database:$tid" >> "$QUEUE_FILE"
     done
-    for j in "${!RESEARCH_TASKS[@]}"; do
-        launch_research_worker "${RESEARCH_TASKS[$j]}" "$(( ${#DB_TASKS[@]} + j ))"
-        PIDS+=($!)
+fi
+if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
+    for tid in "${RESEARCH_TASKS[@]}"; do
+        echo "research:$tid" >> "$QUEUE_FILE"
     done
-    for k in "${!CODING_TASKS[@]}"; do
-        launch_coding_worker "${CODING_TASKS[$k]}" "$(( ${#DB_TASKS[@]} + ${#RESEARCH_TASKS[@]} + k ))"
-        PIDS+=($!)
+fi
+if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ]; then
+    for tid in "${CODING_TASKS[@]}"; do
+        echo "coding:$tid" >> "$QUEUE_FILE"
     done
-
-    echo ">>> All ${#PIDS[@]} workers active simultaneously! Waiting for full wave completion..."
-    wait "${PIDS[@]}"
-    echo ">>> All Database, Research, and Coding Tasks successfully completed in parallel!"
-
-else
-    # Phased batch mode
-    if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
-        if [ ${#DB_TASKS[@]} -gt 0 ]; then
-            echo ">>> [Phase 1/3] Launching Database Benchmark across $CONCURRENCY parallel sandboxes..."
-            PIDS=()
-            for i in "${!DB_TASKS[@]}"; do
-                launch_db_worker "${DB_TASKS[$i]}" "$((i % CONCURRENCY))"
-                PIDS+=($!)
-                if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#DB_TASKS[@]} ]; then
-                    echo "Waiting for current Database batch to complete..."
-                    wait "${PIDS[@]}"
-                    PIDS=()
-                fi
-            done
-            [ ${#PIDS[@]} -gt 0 ] && wait "${PIDS[@]}"
-            echo ">>> Database Tasks completed!"
-        fi
-    fi
-
-    if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
-        if [ ${#RESEARCH_TASKS[@]} -gt 0 ]; then
-            echo ">>> [Phase 2/3] Launching Research Benchmark across $CONCURRENCY parallel workers..."
-            PIDS=()
-            for i in "${!RESEARCH_TASKS[@]}"; do
-                launch_research_worker "${RESEARCH_TASKS[$i]}" "$((i % CONCURRENCY))"
-                PIDS+=($!)
-                if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#RESEARCH_TASKS[@]} ]; then
-                    echo "Waiting for current Research batch to complete..."
-                    wait "${PIDS[@]}"
-                    PIDS=()
-                fi
-            done
-            [ ${#PIDS[@]} -gt 0 ] && wait "${PIDS[@]}"
-            echo ">>> Research Tasks completed!"
-        fi
-    fi
-
-    if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ]; then
-        if [ ${#CODING_TASKS[@]} -gt 0 ]; then
-            echo ">>> [Phase 3/3] Launching Coding Benchmark across $CONCURRENCY parallel workers..."
-            PIDS=()
-            for i in "${!CODING_TASKS[@]}"; do
-                launch_coding_worker "${CODING_TASKS[$i]}" "$((i % CONCURRENCY))"
-                PIDS+=($!)
-                if [ $(( (i + 1) % CONCURRENCY )) -eq 0 ] && [ $((i + 1)) -lt ${#CODING_TASKS[@]} ]; then
-                    echo "Waiting for current Coding batch to complete..."
-                    wait "${PIDS[@]}"
-                    PIDS=()
-                fi
-            done
-            [ ${#PIDS[@]} -gt 0 ] && wait "${PIDS[@]}"
-            echo ">>> Coding Tasks completed!"
-        fi
-    fi
 fi
 
+TOTAL_QUEUED=$(wc -l < "$QUEUE_FILE" | tr -d " ")
+echo "Loaded $TOTAL_QUEUED total tasks into Dynamic Worker Pool queue."
+
+pop_dynamic_task() {
+    python3 -c "
+import fcntl, sys
+qfile = '$QUEUE_FILE'
+try:
+    with open(qfile, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        lines = f.readlines()
+        if lines:
+            task = lines[0].strip()
+            f.seek(0)
+            f.truncate()
+            f.writelines(lines[1:])
+            print(task)
+        fcntl.flock(f, fcntl.LOCK_UN)
+except Exception:
+    pass
+"
+}
+
+worker_slot_loop() {
+    local slot_id="$1"
+    echo "[Worker Pool Slot $slot_id] Online and listening for tasks..."
+    while true; do
+        local item="$(pop_dynamic_task)"
+        if [ -z "$item" ]; then
+            echo "[Worker Pool Slot $slot_id] No remaining tasks in queue. Slot exiting."
+            break
+        fi
+
+        local bench="${item%%:*}"
+        local tid="${item##*:}"
+        echo "[Worker Pool Slot $slot_id] ==> Claimed task: $bench $tid"
+        if [ "$bench" == "database" ]; then
+            launch_db_worker "$tid" "$slot_id"
+        elif [ "$bench" == "research" ]; then
+            launch_research_worker "$tid" "$slot_id"
+        elif [ "$bench" == "coding" ]; then
+            launch_coding_worker "$tid" "$slot_id"
+        fi
+        echo "[Worker Pool Slot $slot_id] <== Completed task: $bench $tid"
+    done
+}
+
+PIDS=()
+for slot in $(seq 0 $((CONCURRENCY - 1))); do
+    worker_slot_loop "$slot" &
+    PIDS+=($!)
+done
+
+echo ">>> All $CONCURRENCY dynamic worker slots dispatched! Processing queue..."
+wait "${PIDS[@]}"
+echo ">>> All dynamic worker slots successfully finished all tasks!"
 # ------------------------------------------------------------------------------
 # Automatic Self-Healing & 429/Failure Retry Sweep
 # Guarantees that any transient rate-limit (429) or port-conflict failures are

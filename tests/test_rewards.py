@@ -108,7 +108,7 @@ def test_proposal_rewards_simpo_density_penalty():
 
 
 def test_proposal_rewards_includes_absent_decisions():
-    # R08: Absent proposals receive credit = advantage (cost 0.0) and are keyed by proposal_id
+    # Chapter 6: Absent proposals receive credit = 0.0 (no free advantage for inaction) and are keyed by proposal_id
     events = [
         {
             "event": "memory_decision",
@@ -124,10 +124,37 @@ def test_proposal_rewards_includes_absent_decisions():
         },
     ]
     credits = proposal_rewards(events, task_score=0.9, same_task_baseline=0.4)
-    # Advantage = 0.5
-    assert credits["prop_absent_1"] == 0.5
+    # Advantage = 0.5, but absent proposal receives credit = 0.0
+    assert credits["prop_absent_1"] == 0.0
     assert "prop_stored_1" in credits
     assert "m1" in credits
+
+
+def test_proposal_rewards_harmful_cross_read_penalized():
+    # Harmful cross-agent read (A < 0) incurs harmful_penalty (default 0.2)
+    events = [
+        {
+            "event": "memory_decision",
+            "memory_id": "m_harmful",
+            "target": {"visibility": "global"},
+            "proposal": {"proposal_id": "p_harm", "agent_id": "a1", "raw_value": "bad advice"},
+        },
+        {
+            "event": "memory_read",
+            "memory_id": "m_harmful",
+            "reader_id": "a2",
+        },
+        {
+            "event": "memory_proposal",
+            "proposal": {"agent_id": "a2", "raw_value": "confused action"},
+        },
+    ]
+    # Negative advantage: task_score = -0.5, baseline = 0.0 -> A = -0.5
+    credits = proposal_rewards(events, task_score=-0.5, same_task_baseline=0.0)
+    cost = token_count("bad advice") / 4096
+    expected = -0.5 - 0.05 * cost - 0.2  # A - lam*cost - harmful_penalty
+    assert abs(credits["m_harmful"] - expected) < 1e-9
+
 
 
 def test_targeted_memory_collaboration_and_density_exemption():

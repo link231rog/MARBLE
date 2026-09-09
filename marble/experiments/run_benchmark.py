@@ -229,6 +229,17 @@ def make_controller(
                         "To use local weights, unset MARBLE_QWEN_API_BASE; to use a served adapter, "
                         "set --qwen-api-model to the served adapter name on vLLM."
                     )
+            # Guard against routing custom local adapters to public cloud providers
+            if effective_api_model and (
+                effective_api_model in ("qwen_rl", "qwen_sft")
+                or (effective_api_model.startswith("qwen_") and effective_api_model.endswith(("_sft", "_rl")))
+            ):
+                if "siliconflow" in api_base.lower() or "openrouter" in api_base.lower() or "nvidia" in api_base.lower():
+                    raise ValueError(
+                        f"Fatal configuration error: Cannot route custom adapter '{effective_api_model}' to public provider '{api_base}'. "
+                        "Custom LoRA adapters must be served on your local/GPU1 vLLM endpoint (e.g. http://127.0.0.1:18000/v1)."
+                    )
+
             api_key = (
                 qwen_api_key
                 or os.environ.get("MARBLE_QWEN_API_KEY")
@@ -1174,6 +1185,10 @@ def _run_real_episode(
         "global_non_owner_reuse",
         "cross_agent_exposure",
         "cross_agent_reads",
+        "productive_cross_reads",
+        "productive_cross_read_rate",
+        "harmful_cross_reads",
+        "harmful_cross_read_rate",
         "negative_transfer",
     ):
         if metric_name in memory_metrics:

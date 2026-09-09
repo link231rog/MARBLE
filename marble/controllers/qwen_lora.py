@@ -79,6 +79,13 @@ def api_generate_fn(
                 return content
             except Exception as exc:
                 last_err = exc
+                err_msg = str(exc).lower()
+                if "model does not exist" in err_msg or "20012" in err_msg or "model_not_found" in err_msg:
+                    logger.error(
+                        "Controller API fatal error: requested model '%s' does not exist on endpoint %s! (%s)",
+                        model, api_base, exc
+                    )
+                    raise last_err
                 if attempt < max_retries:
                     sleep_s = base_delay * (2 ** attempt)
                     logger.warning(
