@@ -344,6 +344,7 @@ def sequence_log_probs(logits: Any, labels: Any) -> Any:
     """Return summed completion-token log probabilities for each example."""
     import torch
 
+    labels = labels.to(logits.device)
     next_logits = logits[:, :-1, :].contiguous()
     next_labels = labels[:, 1:].contiguous()
     token_mask = next_labels.ne(-100)
