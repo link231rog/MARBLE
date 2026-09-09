@@ -242,10 +242,13 @@ if __name__ == "__main__":
 
         if not args.rewards:
             parser.error("--rewards is required for qwen_rl")
-        rewards = [
-            float(json.load(open(reward_path, encoding="utf-8")).get("task_score", 0.0))
-            for reward_path in args.rewards
-        ]
+        rewards = []
+        for r_item in args.rewards:
+            try:
+                rewards.append(float(r_item))
+            except ValueError:
+                with open(r_item, encoding="utf-8") as fh:
+                    rewards.append(float(json.load(fh).get("task_score", 0.0) or 0.0))
         epochs = 1 if args.epochs == 20 else args.epochs
         qwen_lora.train_qwen_rl(
             trace_paths, args.out, args.base_model, rewards=rewards,
