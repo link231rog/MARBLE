@@ -48,6 +48,14 @@ elif scale_env in ("0.8b", "2b", "9b"):
         f"qwen_{scale_env}_rl": f"/data/home/huangzixuan/MARBLE/runs/checkpoints/controller_scaling/qwen_{scale_env}_rl",
     }
 
+ckpt_base = "/data/home/huangzixuan/MARBLE/runs/checkpoints"
+if os.path.isdir(ckpt_base):
+    for sub in sorted(os.listdir(ckpt_base)):
+        sub_p = os.path.join(ckpt_base, sub)
+        if os.path.isdir(sub_p) and os.path.isfile(os.path.join(sub_p, "adapter_config.json")):
+            if sub not in ADAPTER_MAP:
+                ADAPTER_MAP[sub] = sub_p
+
 def _safe_adapter_name(name: str) -> str:
     return name.replace(".", "_")
 
