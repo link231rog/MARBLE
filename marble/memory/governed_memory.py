@@ -51,10 +51,14 @@ class GovernedMemory:
         prompt = getattr(self.controller, "last_prompt", None)
         raw = getattr(self.controller, "last_raw", None)
         parse_status = getattr(self.controller, "last_parse_status", None)
+        log_prob = getattr(self.controller, "last_log_prob", None)
         if prompt is not None:
             metadata["controller_prompt"] = prompt
         if raw is not None:
             metadata["controller_output"] = raw
+        if log_prob is not None:
+            metadata["old_log_prob"] = float(log_prob)
+            metadata["controller_log_prob"] = float(log_prob)
         if parse_status is not None:
             metadata["parse_status"] = parse_status
         elif raw is not None or prompt is not None:
@@ -75,7 +79,12 @@ class GovernedMemory:
         top_k: int = 5,
     ) -> List[MemoryCard]:
         cards = self.bank.visible_keys(reader_id, task_id)
-        return self.retriever.rank(cards, query=query, top_k=top_k)
+        if hasattr(self.retriever, "rank"):
+            try:
+                return self.retriever.rank(cards, query=query, top_k=top_k, reader_id=reader_id)
+            except TypeError:
+                return self.retriever.rank(cards, query=query, top_k=top_k)
+        return cards[:top_k]
 
     def read(self, memory_id: str, reader_id: str, task_id: str) -> MemoryItem:
         item = self.bank.read(memory_id, reader_id, task_id)

@@ -37,6 +37,7 @@ def get_target_tasks(manifest: Dict[str, Any], split: str = "test_hard") -> set[
 
 CANONICAL_ORDER = [
     "ours_rl",
+    "ours_sft_v2",
     "ours_sft",
     "ours_base",
     "ours_private_to_global",
@@ -53,6 +54,7 @@ CANONICAL_ORDER = [
 
 NAME_DISPLAY = {
     "ours_rl": "Ours-RL (Governed)",
+    "ours_sft_v2": "Ours-SFT-v2",
     "ours_sft": "Ours-SFT",
     "ours_base": "Ours-Base (Zero-Shot)",
     "ours_private_to_global": "Ours (Private->Global)",
@@ -97,6 +99,10 @@ def aggregate_runs(
         ablation = d.get("ablation")
         if method == "ours_rl" and ablation and "private_to_global" in ablation:
             method = "ours_private_to_global"
+        elif method == "ours_sft":
+            ctrl = str(d.get("controller_model", ""))
+            if "sft_v2" in ctrl or "sft_v2" in s_path:
+                method = "ours_sft_v2"
 
         bn = str(d.get("benchmark", ""))
         tid = d.get("task_id")

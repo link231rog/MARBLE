@@ -48,6 +48,7 @@ class JsonController:
         self.last_prompt = ""
         self.last_raw = ""
         self.last_parse_status = ""
+        self.last_log_prob: Optional[float] = None
 
     def set_context(
         self,
@@ -125,6 +126,7 @@ class JsonController:
         self.last_prompt = self.build_prompt(proposal, current_state)
         raw = self.llm_fn(self.last_prompt)
         self.last_raw = raw
+        self.last_log_prob = getattr(self.llm_fn, "last_log_prob", None)
         error = self._validate(raw, current_state, proposal)
         if error is not None:
             self.last_parse_status = (

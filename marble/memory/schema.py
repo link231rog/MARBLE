@@ -85,6 +85,15 @@ class MemoryCard:
     title: str
     visibility: Literal["global", "targeted"] = "global"
     target_recipients: tuple = ()
+    supersedes: Optional[str] = None
+    update: Optional[str] = None
+    topics: tuple = ()
+
+    def __post_init__(self) -> None:
+        if self.update is not None and self.supersedes is None:
+            object.__setattr__(self, "supersedes", self.update)
+        elif self.supersedes is not None and self.update is None:
+            object.__setattr__(self, "update", self.supersedes)
 
 
 @dataclass(frozen=True)
@@ -124,4 +133,7 @@ class MemoryItem:
             title=self.title,
             visibility=self.visibility,
             target_recipients=self.target_recipients,
+            supersedes=self.supersedes,
+            update=self.update,
+            topics=self.topics,
         )

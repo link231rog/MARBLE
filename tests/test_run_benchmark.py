@@ -118,7 +118,7 @@ def test_qwen_rl_schema_field_ablation_passes_drop_fields(monkeypatch):
     """schema_field ablation passes the correct drop_fields to Qwen controller."""
     seen = {}
 
-    def fake_api(api_base, api_key, model):
+    def fake_api(api_base, api_key, model, **kwargs):
         return lambda prompt: '{"visibility":"global","supersedes":null}'
 
     def fake_make(gen, drop_fields=(), **kw):
@@ -150,7 +150,7 @@ def test_non_qwen_ablation_does_not_double_apply(monkeypatch):
 def test_qwen_endpoint_mode_uses_explicit_served_model(monkeypatch):
     seen = {}
 
-    def fake_api(api_base, api_key, model):
+    def fake_api(api_base, api_key, model, **kwargs):
         seen.update(api_base=api_base, api_key=api_key, model=model)
         return lambda prompt: '{"visibility":"global","supersedes":null}'
 

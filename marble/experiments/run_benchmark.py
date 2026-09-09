@@ -255,6 +255,7 @@ def make_controller(
                 api_base,
                 api_key,
                 effective_api_model or base_model,
+                temperature=qwen_temperature,
             )
         else:
             if not controller_checkpoint:

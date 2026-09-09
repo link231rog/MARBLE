@@ -97,6 +97,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 256
     temperature: Optional[float] = 0.0
     top_p: Optional[float] = 1.0
+    logprobs: Optional[bool] = False
 
 @app.get("/health")
 @app.get("/v1/health")
@@ -220,6 +221,9 @@ async def chat_completions(req: ChatCompletionRequest):
             if do_sample:
                 gen_kwargs["temperature"] = req.temperature
                 gen_kwargs["top_p"] = req.top_p
+            if req.logprobs:
+                gen_kwargs["return_dict_in_generate"] = True
+                gen_kwargs["output_scores"] = True
 
             is_base = (adapter_mode == "base")
             active_model = base_model if peft_wrapper is None else peft_wrapper
@@ -227,30 +231,48 @@ async def chat_completions(req: ChatCompletionRequest):
             with torch.inference_mode():
                 if is_base and peft_wrapper is not None:
                     with peft_wrapper.disable_adapter():
-                        out_ids = active_model.generate(**inputs, **gen_kwargs)
+                        out_gen = active_model.generate(**inputs, **gen_kwargs)
                 else:
                     if peft_wrapper is not None:
                         peft_wrapper.set_adapter(adapter_mode)
-                    out_ids = active_model.generate(**inputs, **gen_kwargs)
+                    out_gen = active_model.generate(**inputs, **gen_kwargs)
+
+            if hasattr(out_gen, "sequences"):
+                out_ids = out_gen.sequences
+                scores = getattr(out_gen, "scores", None)
+            else:
+                out_ids = out_gen
+                scores = None
 
             new_tokens = out_ids[0, prompt_len:]
             raw_output = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
             clean_output = _clean_output_text(raw_output)
             completion_len = len(new_tokens)
 
+            choice_obj: Dict[str, Any] = {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": clean_output,
+                },
+                "finish_reason": "stop",
+            }
+            if req.logprobs and scores is not None:
+                content_logprobs = []
+                for i, score in enumerate(scores):
+                    if i < len(new_tokens):
+                        tok_id = int(new_tokens[i].item())
+                        tok_str = tokenizer.decode([tok_id])
+                        lp = float(torch.nn.functional.log_softmax(score[0], dim=-1)[tok_id].item())
+                        content_logprobs.append({"token": tok_str, "logprob": lp})
+                choice_obj["logprobs"] = {"content": content_logprobs}
+
             return {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
                 "object": "chat.completion",
                 "created": int(time.time()),
                 "model": req.model,
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": clean_output,
-                    },
-                    "finish_reason": "stop",
-                }],
+                "choices": [choice_obj],
                 "usage": {
                     "prompt_tokens": prompt_len,
                     "completion_tokens": completion_len,

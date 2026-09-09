@@ -30,6 +30,7 @@ def api_generate_fn(
     model: str,
     max_tokens: int = 256,
     timeout: Optional[float] = None,
+    temperature: float = 0.0,
 ) -> Callable[[str], str]:
     import os
 
@@ -40,6 +41,7 @@ def api_generate_fn(
         if timeout is not None
         else float(os.environ.get("MARBLE_CONTROLLER_TIMEOUT", "180.0"))
     )
+    eff_temperature = float(os.environ.get("MARBLE_CONTROLLER_TEMPERATURE", str(temperature)))
     client = OpenAI(base_url=api_base, api_key=api_key, timeout=eff_timeout)
     disable_thinking = (
         "siliconflow" in api_base
@@ -56,7 +58,8 @@ def api_generate_fn(
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": min(max_tokens, 64),
-            "temperature": 0.0,
+            "temperature": eff_temperature,
+            "logprobs": True,
         }
         if disable_thinking:
             kwargs["extra_body"] = {"enable_thinking": False}
@@ -69,7 +72,8 @@ def api_generate_fn(
             try:
                 resp = client.chat.completions.create(**kwargs)
                 record_successful_completion(resp)
-                content = (resp.choices[0].message.content or "").strip()
+                choice = resp.choices[0]
+                content = (choice.message.content or "").strip()
                 if content.startswith("```"):
                     lines = content.splitlines()
                     if lines and lines[0].startswith("```"):
@@ -77,6 +81,19 @@ def api_generate_fn(
                     if lines and lines[-1].startswith("```"):
                         lines = lines[:-1]
                     content = "\n".join(lines).strip()
+
+                total_log_prob = 0.0
+                has_logprobs = False
+                if hasattr(choice, "logprobs") and choice.logprobs:
+                    content_logprobs = getattr(choice.logprobs, "content", None) or []
+                    if content_logprobs:
+                        total_log_prob = sum(
+                            float(t.logprob)
+                            for t in content_logprobs
+                            if getattr(t, "logprob", None) is not None
+                        )
+                        has_logprobs = True
+                gen.last_log_prob = float(total_log_prob) if has_logprobs else None
                 return content
             except Exception as exc:
                 last_err = exc
@@ -96,8 +113,10 @@ def api_generate_fn(
                     time.sleep(sleep_s)
                 else:
                     raise last_err
+        gen.last_log_prob = None
         return ""
 
+    gen.last_log_prob = None
     return gen
 
 
@@ -143,10 +162,24 @@ def local_generate_fn(
         out = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
+            return_dict_in_generate=True,
+            output_scores=True,
             **generation_kwargs,
         )
-        return tok.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+        gen_tokens = out.sequences[0][inputs.input_ids.shape[1]:]
+        text = tok.decode(gen_tokens, skip_special_tokens=True).strip()
+        total_lp = 0.0
+        if hasattr(out, "scores") and out.scores:
+            for i, score in enumerate(out.scores):
+                if i < len(gen_tokens):
+                    lp = torch.nn.functional.log_softmax(score[0], dim=-1)[gen_tokens[i]].item()
+                    total_lp += lp
+            gen.last_log_prob = float(total_lp)
+        else:
+            gen.last_log_prob = None
+        return text
 
+    gen.last_log_prob = None
     return gen
 
 
@@ -440,7 +473,10 @@ def load_qwen_rl_samples(
             advantage=norm_advantage,
             same_task_baseline=mean_s,
             task_success=task_success,
-            target_bonus=0.3,
+            target_bonus=0.35,
+            gamma_density=0.15,
+            target_card_budget=8,
+            harmful_penalty=0.25,
         )
         for event in events:
             if event.get("event") != "memory_decision":
@@ -655,6 +691,16 @@ def train_qwen_rl(
         )
         model = get_peft_model(model, lora)
     model.config.pad_token_id = tokenizer.pad_token_id
+    if hasattr(model, "enable_input_require_grads"):
+        try:
+            model.enable_input_require_grads()
+        except Exception:
+            pass
+    if hasattr(model, "gradient_checkpointing_enable"):
+        try:
+            model.gradient_checkpointing_enable()
+        except Exception:
+            pass
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
@@ -665,6 +711,8 @@ def train_qwen_rl(
         )
         item["advantage"] = float(sample["advantage"])
         item["old_log_prob"] = sample.get("old_log_prob")
+        item["benchmark"] = sample.get("benchmark", "")
+        item["task_id"] = sample.get("task_id", "")
         examples.append(item)
 
     # 1. Compute old_log_prob under rollout policy (init_checkpoint) if not logged in trace
@@ -682,6 +730,9 @@ def train_qwen_rl(
                         ex["old_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
                     else:
                         ex["old_log_prob"] = 0.0
+                    del in_ids, attn, lbls, out
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # 2. Compute ref_log_prob under frozen SFT reference policy (Chapter 4 §6)
     ref_ckpt = sft_reference_checkpoint or init_checkpoint
@@ -703,10 +754,13 @@ def train_qwen_rl(
                         ex["ref_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
                     else:
                         ex["ref_log_prob"] = float(ex["old_log_prob"])
+                    del in_ids, attn, lbls, out
             model.set_adapter("default")
         except Exception:
             for ex in examples:
                 ex["ref_log_prob"] = float(ex["old_log_prob"])
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     else:
         for ex in examples:
             ex["ref_log_prob"] = float(ex["old_log_prob"])
@@ -724,39 +778,65 @@ def train_qwen_rl(
             "ref_log_prob": torch.tensor([f["ref_log_prob"] for f in features], dtype=torch.float),
         }
 
+    # Group examples strictly by (benchmark, task_id) for true Group Batching
+    task_groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for ex in examples:
+        key = (ex.get("benchmark", ""), str(ex.get("task_id", "")))
+        task_groups.setdefault(key, []).append(ex)
+
     trainable_parameters = [
         parameter for parameter in model.parameters() if parameter.requires_grad
     ]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=lr)
-    loader = DataLoader(examples, batch_size=1, shuffle=True, collate_fn=grpo_collate)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    import random
     model.train()
+    chunk_size = int(os.environ.get("MARBLE_RL_CHUNK_SIZE", "1"))
     for _ in range(epochs):
-        for batch in loader:
-            labels = batch.pop("labels").to(device)
-            advantages = batch.pop("advantage").to(device)
-            old_log_probs = batch.pop("old_log_prob").to(device)
-            ref_log_probs = batch.pop("ref_log_prob").to(device)
-            batch = {name: value.to(device) for name, value in batch.items()}
-            outputs = model(**batch)
-            if hasattr(outputs, "logits"):
-                curr_log_probs = sequence_log_probs(outputs.logits, labels).to(device)
-                # Policy ratio r_{e,d} = exp(curr_log_prob - old_log_prob)
-                ratio = torch.exp(curr_log_probs - old_log_probs)
-                # Clipped surrogate loss: -min(r * A, clip(r, 1-eps, 1+eps) * A)
-                surr1 = ratio * advantages
-                surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
-                policy_loss = -torch.minimum(surr1, surr2).mean()
-                # Non-negative reverse KL divergence: exp(log_ref - log_curr) - (log_ref - log_curr) - 1
-                log_diff = ref_log_probs - curr_log_probs
-                kl_div = torch.exp(log_diff) - log_diff - 1.0
-                loss = policy_loss + kl_coeff * kl_div.mean()
-            else:
-                loss = torch.tensor(0.0, requires_grad=True, device=device)
+        group_keys = list(task_groups.keys())
+        if seed is not None:
+            random.seed(seed)
+        random.shuffle(group_keys)
+
+        for g_key in group_keys:
+            g_examples = task_groups[g_key]
+            total_decisions = len(g_examples)
+            if total_decisions == 0:
+                continue
 
             optimizer.zero_grad()
-            loss.backward()
+            for c_idx in range(0, total_decisions, chunk_size):
+                chunk = g_examples[c_idx : c_idx + chunk_size]
+                batch = grpo_collate(chunk)
+                labels = batch.pop("labels").to(device)
+                advantages = batch.pop("advantage").to(device)
+                old_log_probs = batch.pop("old_log_prob").to(device)
+                ref_log_probs = batch.pop("ref_log_prob").to(device)
+                batch = {name: value.to(device) for name, value in batch.items()}
+                outputs = model(**batch)
+                if hasattr(outputs, "logits"):
+                    curr_log_probs = sequence_log_probs(outputs.logits, labels).to(device)
+                    # Policy ratio r_{e,d} = exp(curr_log_prob - old_log_prob)
+                    ratio = torch.exp(curr_log_probs - old_log_probs)
+                    # Clipped surrogate loss: -min(r * A, clip(r, 1-eps, 1+eps) * A)
+                    surr1 = ratio * advantages
+                    surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages
+                    policy_loss = -torch.minimum(surr1, surr2).sum() / total_decisions
+                    # Non-negative reverse KL divergence: exp(log_ref - log_curr) - (log_ref - log_curr) - 1
+                    log_diff = ref_log_probs - curr_log_probs
+                    kl_div = torch.exp(log_diff) - log_diff - 1.0
+                    loss = policy_loss + kl_coeff * (kl_div.sum() / total_decisions)
+                else:
+                    loss = torch.tensor(0.0, requires_grad=True, device=device)
+
+                loss.backward()
+                del loss, outputs, batch, labels, advantages, old_log_probs, ref_log_probs
+
             torch.nn.utils.clip_grad_norm_(trainable_parameters, max_grad_norm)
             optimizer.step()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -766,6 +846,8 @@ def train_qwen_rl(
     metadata = {
         "base_model": base_model,
         "training_method": "trajectory_grpo",
+        "group_batching": True,
+        "groups": len(task_groups),
         "group_size": group_size,
         "kl_anchor": True,
         "kl_coeff": kl_coeff,
