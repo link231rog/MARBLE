@@ -555,8 +555,9 @@ def test_train_qwen_rl_trajectory_grpo_pipeline(monkeypatch, tmp_path):
             if in_ids is None and a:
                 in_ids = a[0]
             seq_len = in_ids.shape[1] if in_ids is not None else 7
+            dev = in_ids.device if in_ids is not None else "cpu"
             return SimpleNamespace(
-                logits=torch.zeros((1, seq_len, 20), requires_grad=True)
+                logits=torch.zeros((1, seq_len, 20), requires_grad=True, device=dev)
             )
 
     monkeypatch.setattr(

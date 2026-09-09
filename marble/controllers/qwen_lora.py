@@ -731,7 +731,7 @@ def train_qwen_rl(
             batch = {name: value.to(device) for name, value in batch.items()}
             outputs = model(**batch)
             if hasattr(outputs, "logits"):
-                curr_log_probs = sequence_log_probs(outputs.logits, labels)
+                curr_log_probs = sequence_log_probs(outputs.logits, labels).to(device)
                 # Policy ratio r_{e,d} = exp(curr_log_prob - old_log_prob)
                 ratio = torch.exp(curr_log_probs - old_log_probs)
                 # Clipped surrogate loss: -min(r * A, clip(r, 1-eps, 1+eps) * A)
