@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from marble.controllers.json_controller import VALID_VISIBILITIES
 from marble.controllers.qwen_lora import (
+    audit_sft_distribution,
     completion_only_collator,
     completion_only_example,
     export_sft_pairs,
@@ -598,4 +599,78 @@ def test_train_qwen_rl_trajectory_grpo_pipeline(monkeypatch, tmp_path):
     assert meta["group_size"] == 4
     assert meta["kl_anchor"] is True
     assert meta["epochs"] == 1
+
+
+def test_export_sft_pairs_serializes_targeted_recipients_as_list(tmp_path):
+    trace = tmp_path / "targeted.jsonl"
+    ev = {
+        "event": "memory_decision",
+        "memory_id": "m_target",
+        "controller_prompt": "targeted prompt",
+        "proposal": {
+            "proposal_id": "p_target",
+            "task_id": "t",
+            "agent_id": "worker_1",
+            "title": "targeted note",
+            "raw_value": "secret",
+            "step_index": 1,
+        },
+        "target": {
+            "visibility": "targeted",
+            "target_recipients": ["worker_2"],
+            "supersedes": None,
+        },
+    }
+    trace.write_text(json.dumps(ev) + "\n", encoding="utf-8")
+    pairs = export_sft_pairs([str(trace)])
+    assert len(pairs) == 1
+    prompt, completion = pairs[0]
+    parsed = json.loads(completion)
+    assert parsed["visibility"] == ["worker_2"]
+    assert parsed["supersedes"] is None
+
+    # Verify audit counts it under private
+    report = audit_sft_distribution(pairs)
+    assert report["counts"]["private"] == 1
+    assert report["counts"]["invalid"] == 0
+
+
+def test_load_qwen_rl_samples_reads_real_task_success_from_summary(tmp_path):
+    t1_dir = tmp_path / "task1_r1"
+    t2_dir = tmp_path / "task1_r2"
+    t1_dir.mkdir()
+    t2_dir.mkdir()
+
+    trace1 = t1_dir / "memory_trace.jsonl"
+    trace2 = t2_dir / "memory_trace.jsonl"
+    summary1 = t1_dir / "summary.json"
+    summary2 = t2_dir / "summary.json"
+
+    ev1 = {
+        "event": "memory_decision",
+        "memory_id": "m1",
+        "controller_prompt": "prompt 1",
+        "controller_output": '{"visibility": "global", "supersedes": null}',
+        "proposal": {"proposal_id": "p1", "task_id": "task_A", "agent_id": "a1", "raw_value": "data"},
+        "target": {"visibility": "global", "supersedes": None},
+    }
+    ev2 = {
+        "event": "memory_decision",
+        "memory_id": "m2",
+        "controller_prompt": "prompt 2",
+        "controller_output": '{"visibility": "global", "supersedes": null}',
+        "proposal": {"proposal_id": "p2", "task_id": "task_A", "agent_id": "a1", "raw_value": "data"},
+        "target": {"visibility": "global", "supersedes": None},
+    }
+    trace1.write_text(json.dumps(ev1) + "\n", encoding="utf-8")
+    trace2.write_text(json.dumps(ev2) + "\n", encoding="utf-8")
+
+    # Score is 0.8, but task_success is True in summary
+    summary1.write_text(json.dumps({"benchmark": "bm", "task_score": 0.8, "task_success": True}), encoding="utf-8")
+    summary2.write_text(json.dumps({"benchmark": "bm", "task_score": 0.6, "task_success": False}), encoding="utf-8")
+
+    samples, stats = load_qwen_rl_samples([str(trace1), str(trace2)], rewards=[0.8, 0.6])
+    assert stats["samples"] == 2
+    assert len(samples) == 2
+
 

@@ -38,8 +38,14 @@ class EpisodeStats:
         ) / budget
 
 
-def episode_reward(stats: EpisodeStats) -> float:
-    return stats.task_score - LAMBDA * stats.memory_cost
+def episode_reward(
+    stats: EpisodeStats,
+    beta: float = BETA,
+    lambda_: float = LAMBDA,
+) -> float:
+    productive_reads = float(getattr(stats, "productive_cross_reads", 0) or 0.0)
+    collab_bonus = beta * min(1.0, productive_reads / 4.0)
+    return stats.task_score + collab_bonus - lambda_ * stats.memory_cost
 
 
 def measured_memory_cost(events: List[Dict[str, Any]], token_budget: int = _TOKEN_BUDGET) -> float:
@@ -66,6 +72,7 @@ def proposal_rewards(
     task_success: bool | None = None,
     harmful_penalty: float = 0.2,
     advantage: float | None = None,
+    target_bonus: float = 0.3,
 ) -> Dict[str, float]:
     """G_i per proposal from one episode's trace events (Chapter 6 Credit Assignment).
 
@@ -75,8 +82,8 @@ def proposal_rewards(
     - Stored, unread: memory_credit = -lambda * cost - dp
     - Stored, author read: memory_credit = A - lambda * cost - dp
     - Stored, productive cross-agent read (reader != author, real memory, subsequent action, A > 0):
-        memory_credit = A * (1 + alpha) - lambda * cost - dp
-    - Stored, harmful cross-agent read (reader != author, A < 0):
+        memory_credit = A * (1 + beta) + target_bonus (if targeted hit) - lambda * cost - dp
+    - Stored, harmful cross-agent read (reader != author, task failed and below baseline):
         memory_credit = A - lambda * cost - dp - harmful_penalty
     """
     b = BETA if beta is None else beta
@@ -132,9 +139,9 @@ def proposal_rewards(
     if global_cards_count > target_card_budget and target_card_budget > 0 and gamma_density > 0:
         density_penalty = gamma_density * (global_cards_count - target_card_budget) / target_card_budget
 
-    # Legacy outcome gating support if explicitly requested
+    # Success determination (support explicit boolean/numeric task_success, else fallback to score threshold)
     if task_success is not None:
-        is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 1.0)
+        is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 0.5)
     elif pass_at_1 is not None:
         is_success = (pass_at_1 >= 1.0)
     else:
@@ -161,6 +168,8 @@ def proposal_rewards(
                 author = p_info.get("author") or p_info.get("owner") or owners.get(mid)
                 mid_reads = [r for r in read_events if r.get("memory_id") == mid]
                 non_author_reads = [r for r in mid_reads if r.get("reader_id") and r.get("reader_id") != author]
+                target_recipients = set(p_info.get("target_recipients") or ())
+                is_target_hit = any(r.get("reader_id") in target_recipients for r in non_author_reads)
 
                 if not non_author_reads:
                     # Rule 3: Read by author only
@@ -191,12 +200,19 @@ def proposal_rewards(
                             break
 
                     # Rule 4 & 5: Effective bonus vs Harmful penalty
-                    if outcome_gated and (not is_success or A <= 0):
+                    # Harmful is grounded in true task failure and baseline comparison,
+                    # preventing normal exploration / slight score variance from being penalized.
+                    is_harmful = (not is_success) and (A < 0 or float(task_score) < float(same_task_baseline))
+
+                    if is_harmful:
+                        credit_val = A - lam * cost - dp - harmful_penalty
+                    elif outcome_gated and (not is_success or A <= 0):
                         credit_val = A - lam * cost - dp
                     elif is_effective and A > 0:
-                        credit_val = A * (1.0 + b) - lam * cost - dp
-                    elif A < 0:
-                        credit_val = A - lam * cost - dp - harmful_penalty
+                        t_bonus = target_bonus if is_target_hit else 0.0
+                        credit_val = A * (1.0 + b) + t_bonus - lam * cost - dp
+                    elif is_target_hit and is_success:
+                        credit_val = A + target_bonus - lam * cost - dp
                     else:
                         credit_val = A - lam * cost - dp
 

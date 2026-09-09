@@ -194,7 +194,8 @@ def test_targeted_memory_collaboration_and_density_exemption():
     cost = token_count("targeted diagnostic hint") / 4096
     # Advantage = 1.0, mult = 1.0 + 0.25 = 1.25 (since read by non-owner a2)
     # Density penalty must NOT apply to targeted memory!
-    expected_targeted_credit = 1.0 * 1.25 - 0.05 * cost
+    # Target hit bonus (+0.3) applies because a2 was in target_recipients=["a2"]
+    expected_targeted_credit = 1.0 * 1.25 + 0.3 - 0.05 * cost
     assert abs(credits["m_targeted"] - expected_targeted_credit) < 1e-9
 
     # Global cards DO suffer density penalty
@@ -202,5 +203,65 @@ def test_targeted_memory_collaboration_and_density_exemption():
     global_cost = token_count("global data") / 4096
     expected_global_unread = -0.05 * global_cost - 0.05
     assert abs(credits["g_0"] - expected_global_unread) < 1e-9
+
+
+def test_targeted_memory_hit_bonus_on_zero_advantage():
+    """Targeted memory with target hit receives target_bonus even when advantage is zero."""
+    events = [
+        {
+            "event": "memory_decision",
+            "memory_id": "m_target",
+            "target": {"visibility": "targeted", "target_recipients": ["worker_2"]},
+            "proposal": {"proposal_id": "p_target", "agent_id": "worker_1", "raw_value": "database schema details"},
+        },
+        {
+            "event": "memory_read",
+            "memory_id": "m_target",
+            "reader_id": "worker_2",
+        },
+    ]
+    # Advantage 0.0, but successful task
+    credits = proposal_rewards(events, task_score=0.8, same_task_baseline=0.8, task_success=True)
+    cost = token_count("database schema details") / 4096
+    # A + target_bonus - lam * cost = 0.0 + 0.3 - 0.05 * cost > 0
+    expected = 0.0 + 0.3 - 0.05 * cost
+    assert abs(credits["m_target"] - expected) < 1e-9
+    assert credits["m_target"] > 0.0  # Strictly superior to absent (0.0)!
+
+
+def test_successful_task_with_slight_negative_advantage_not_penalized_as_harmful():
+    """Successful task with negative intra-group advantage is NOT hit with harmful_penalty."""
+    events = [
+        {
+            "event": "memory_decision",
+            "memory_id": "m_cross",
+            "target": {"visibility": "global"},
+            "proposal": {"proposal_id": "p_cross", "agent_id": "a1", "raw_value": "shared finding"},
+        },
+        {
+            "event": "memory_read",
+            "memory_id": "m_cross",
+            "reader_id": "a2",
+        },
+        {
+            "event": "memory_decision",
+            "memory_id": "m_a2",
+            "target": {"visibility": "global"},
+            "proposal": {"proposal_id": "p_a2", "agent_id": "a2", "raw_value": "downstream act"},
+        },
+    ]
+    # Advantage is slightly negative (e.g. -0.2), but task succeeded (task_success=True)
+    credits = proposal_rewards(
+        events,
+        task_score=0.8,
+        same_task_baseline=0.85,
+        advantage=-0.2,
+        task_success=True,
+    )
+    cost = token_count("shared finding") / 4096
+    # Must NOT suffer harmful_penalty (-0.2): credit is A - lam * cost = -0.2 - 0.05 * cost
+    expected = -0.2 - 0.05 * cost
+    assert abs(credits["m_cross"] - expected) < 1e-9
+
 
 

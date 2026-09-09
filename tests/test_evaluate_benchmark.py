@@ -406,5 +406,12 @@ def test_trace_metrics_productive_cross_reads_and_negative_transfer():
     assert m_none["harmful_cross_reads"] == 0
     assert m_none["negative_transfer"] == 0.0
 
+    # Case 5: Successful task with slight negative advantage within group is NOT harmful
+    m_succ_neg = evaluate_memory_trace(events_active, task_success=1.0, advantage=-0.2)
+    assert m_succ_neg["cross_agent_reads"] == 1
+    assert m_succ_neg["harmful_cross_reads"] == 0
+    assert m_succ_neg["negative_transfer"] == 0.0
+
+
 
 

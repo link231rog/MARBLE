@@ -240,13 +240,17 @@ def evaluate_memory_trace(
         if owners.get(mid) and owners.get(mid) != e.get("reader_id")
     )
 
-    if advantage is not None:
+    if task_success is not None:
+        is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 0.5)
+        if advantage is not None:
+            traj_positive = is_success and float(advantage) > 0
+            traj_harmful = (not is_success) and float(advantage) < 0
+        else:
+            traj_positive = is_success
+            traj_harmful = not is_success
+    elif advantage is not None:
         traj_positive = float(advantage) > 0
         traj_harmful = float(advantage) < 0
-    elif task_success is not None:
-        is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 1.0)
-        traj_positive = is_success
-        traj_harmful = not is_success
     elif task_score is not None:
         is_success = (float(task_score) >= 1.0)
         traj_positive = is_success

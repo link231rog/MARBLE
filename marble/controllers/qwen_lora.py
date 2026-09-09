@@ -204,8 +204,17 @@ def export_sft_pairs(
                     step_index=p.get("step_index", 0),
                 )
                 tgt = ev["target"]
+                vis = tgt.get("visibility")
+                if vis == "targeted":
+                    recipients = list(tgt.get("target_recipients") or [])
+                    vis_val = recipients if recipients else [proposal.agent_id]
+                elif vis == "private":
+                    recipients = list(tgt.get("target_recipients") or [])
+                    vis_val = recipients if recipients else "private"
+                else:
+                    vis_val = vis
                 completion = json.dumps(
-                    {"visibility": tgt["visibility"], "supersedes": tgt.get("supersedes")}
+                    {"visibility": vis_val, "supersedes": tgt.get("supersedes")}
                 )
                 prompt = ev.get("controller_prompt")
                 if not isinstance(prompt, str) or not prompt.strip():
@@ -221,8 +230,12 @@ def audit_sft_distribution(pairs: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
         try:
             parsed = json.loads(completion)
             vis = parsed.get("visibility")
-            if vis in counts:
+            if vis in ("absent", "global"):
                 counts[vis] += 1
+            elif isinstance(vis, list) and len(vis) > 0:
+                counts["private"] += 1
+            elif vis in ("private", "targeted"):
+                counts["private"] += 1
             else:
                 counts["invalid"] += 1
         except Exception:
@@ -351,7 +364,7 @@ def load_qwen_rl_samples(
 
     from marble.memory.rewards import proposal_rewards
 
-    episodes: List[Tuple[List[Dict[str, Any]], float, Tuple[str, str]]] = []
+    episodes: List[Tuple[List[Dict[str, Any]], float, Tuple[str, str], Dict[str, Any]]] = []
     scores_by_task: Dict[Tuple[str, str], List[float]] = {}
     for trace_path, reward in zip(trace_paths, rewards):
         with open(trace_path, encoding="utf-8") as fh:
@@ -378,7 +391,7 @@ def load_qwen_rl_samples(
         benchmark = str(summary.get("benchmark", metadata.get("benchmark", "")))
         score = float(reward)
         task_key = (benchmark, task_id)
-        episodes.append((events, score, task_key))
+        episodes.append((events, score, task_key, summary))
         scores_by_task.setdefault(task_key, []).append(score)
     undersized = sorted(task for task, scores in scores_by_task.items() if len(scores) < 2)
     if undersized:
@@ -403,15 +416,24 @@ def load_qwen_rl_samples(
         "skipped_no_prompt": 0,
         "skipped_no_credit": 0,
     }
-    for events, score, task_key in episodes:
+    for events, score, task_key, summary in episodes:
         mean_s, std_s = group_stats[task_key]
         # Chapter 4 §5.1: Group Advantage Normalization: A_e = (S_e - mean) / (std + eps)
         norm_advantage = (score - mean_s) / max(std_s, 1e-8) if std_s > 0 else 0.0
+
+        raw_success = summary.get("task_success")
+        if raw_success is not None:
+            task_success = bool(raw_success) if not isinstance(raw_success, (int, float)) else (float(raw_success) >= 0.5)
+        else:
+            task_success = (score >= 0.5)
+
         credits = proposal_rewards(
             events,
-            task_score=norm_advantage,
-            same_task_baseline=0.0,
-            task_success=(score >= 1.0),
+            task_score=score,
+            advantage=norm_advantage,
+            same_task_baseline=mean_s,
+            task_success=task_success,
+            target_bonus=0.3,
         )
         for event in events:
             if event.get("event") != "memory_decision":

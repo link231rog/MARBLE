@@ -1208,12 +1208,18 @@ def _run_real_episode(
         for event in events
         if event.get("event") in {"memory_r1_operation", "memory_r1_distillation"}
     )
-    metrics["episode_reward"] = float(metrics.get("task_score") or 0.0) - lambda_ * metrics["memory_cost"]
+    productive_reads = float(metrics.get("productive_cross_reads") or 0.0)
+    collab_bonus = beta * min(1.0, productive_reads / 4.0)
+    metrics["episode_reward"] = (
+        float(metrics.get("task_score") or 0.0)
+        + collab_bonus
+        - lambda_ * metrics["memory_cost"]
+    )
     reward_kw: Dict[str, float] = {}
     if ablation:
         factor, option = parse_ablation(ablation)
         reward_kw = reward_override(factor, option)
-    effective_reward_kw = {"beta": beta, "lambda_": lambda_}
+    effective_reward_kw = {"beta": beta, "lambda_": lambda_, "target_bonus": 0.3}
     effective_reward_kw.update(reward_kw)
     credits = proposal_rewards(
         events,
