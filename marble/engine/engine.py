@@ -273,7 +273,7 @@ class Engine:
                 try:
                     with open("../data/score.json", "r") as f:
                         block_hit_rate = json.load(f)[-1]["block_hit_rate"]
-                except:
+                except Exception:
                     block_hit_rate = 0.0
                 self.logger.info(
                     f"Using a rule-based EnginePlanner. block_hit_rate is {block_hit_rate}"
@@ -421,7 +421,7 @@ class Engine:
                     try:
                         with open("../data/score.json", "r") as f:
                             block_hit_rate = json.load(f)[-1]["block_hit_rate"]
-                    except:
+                    except Exception:
                         block_hit_rate = 0.0
                     self.logger.info(
                         f"Using a rule-based EnginePlanner. block_hit_rate is {block_hit_rate}"
@@ -471,7 +471,7 @@ class Engine:
                 try:
                     with open("../data/score.json", "r") as f:
                         block_hit_rate = json.load(f)[-1]["block_hit_rate"]
-                except:
+                except Exception:
                     block_hit_rate = 0.0
                 summary_data["task_evaluation"] = block_hit_rate * 5
             elif self.environment.name == "DB Environment":

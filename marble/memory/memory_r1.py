@@ -7,7 +7,6 @@ from typing import Dict, List, Literal, Optional
 
 from .schema import MemoryProposal
 
-
 MemoryR1Operation = Literal["ADD", "UPDATE", "DELETE", "NOOP"]
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")

@@ -9,7 +9,6 @@ from litellm.types.utils import Message
 from marble.llms.error_handler import api_calling_error_exponential_backoff
 from marble.llms.usage import record_successful_completion
 
-
 _ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 _MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 

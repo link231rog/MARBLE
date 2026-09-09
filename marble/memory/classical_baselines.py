@@ -17,7 +17,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 from .schema import MemoryCard, MemoryProposal
 from .trace import TraceLogger
 
-
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 

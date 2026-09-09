@@ -17,7 +17,8 @@ def _extract_controller_cost(trace_path: Path) -> Dict[str, int]:
     try:
         with trace_path.open(encoding="utf-8") as f:
             for line in f:
-                if not line.strip(): continue
+                if not line.strip():
+                    continue
                 ev = json.loads(line)
                 if ev.get("event") == "memory_decision":
                     calls += 1

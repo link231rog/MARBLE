@@ -2,17 +2,16 @@ import asyncio
 import json
 import os
 import re
-import sys
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from peft import PeftModel
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
 
 MODEL_PATH = os.environ.get("MARBLE_MODEL_PATH", "/data/home/huangzixuan/models/Qwen3.5-4B")
 SERVED_MODEL_NAME = os.environ.get("MARBLE_SERVED_MODEL_NAME", "Qwen/Qwen3.5-4B")

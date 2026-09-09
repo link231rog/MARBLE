@@ -75,12 +75,11 @@ cp .env.template .env
 2. Fill the required environment variables in the `.env` file.
 
 ### Running the examples
-To run examples provided in the `examples`:
+To run examples provided in `scripts`:
 
 ```bash
 poetry install
-cd scripts
-cd werewolf
+cd scripts/research
 bash run_simulation.sh
 ```
 

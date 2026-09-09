@@ -12,7 +12,7 @@ from .schema import (
 
 
 class MemoryBank:
-    """Task-scoped memory store with explicit visibility checks."""
+    """Task-scoped memory store with explicit visibility checks and update/supersession tracking."""
 
     def __init__(self) -> None:
         self._items: Dict[str, MemoryItem] = {}

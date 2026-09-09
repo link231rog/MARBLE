@@ -9,10 +9,10 @@ import json
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from marble.memory.schema import (
+    TOPIC_TAXONOMY,
     MemoryItem,
     MemoryProposal,
     MemoryTargetState,
-    TOPIC_TAXONOMY,
 )
 
 VALID_VISIBILITIES = ("absent", "global")

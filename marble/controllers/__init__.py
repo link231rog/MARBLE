@@ -4,17 +4,6 @@ from typing import Protocol, Sequence
 
 from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
 
-
-class MemoryController(Protocol):
-    """Outputs a target state; the bank applies the diff."""
-
-    def decide(
-        self,
-        proposal: MemoryProposal,
-        current_state: Sequence[MemoryItem],
-    ) -> MemoryTargetState: ...
-
-
 from .heuristic import (
     AbsentController,
     GlobalAlwaysController,
@@ -24,6 +13,16 @@ from .heuristic import (
 )
 from .json_controller import VALID_VISIBILITIES, JsonController
 from .local_policy import LocalPolicyController, features
+
+
+class MemoryController(Protocol):
+    """Outputs a target state; the bank applies the diff."""
+
+    def decide(
+        self,
+        proposal: MemoryProposal,
+        current_state: Sequence[MemoryItem],
+    ) -> MemoryTargetState: ...
 
 __all__ = [
     "AbsentController",

@@ -5,7 +5,6 @@ from typing import Callable, Optional, Sequence
 
 from marble.memory.schema import MemoryItem, MemoryProposal, MemoryTargetState
 
-
 _SHARED_SIGNALS = re.compile(
     r"\b(share|shared|all|team|decision|result|consensus|plan|finding|query_db|tool|"
     r"observation|identified|bottleneck|workload|analysis|summary|literature|paper|"

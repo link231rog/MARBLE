@@ -4,7 +4,6 @@ import re
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-
 Visibility = Literal["absent", "global", "targeted"]
 
 # Fixed initial topic taxonomy (schema-and-reward.md). Soft input only.
@@ -36,6 +35,12 @@ class MemoryProposal:
 
 @dataclass(frozen=True)
 class MemoryTargetState:
+    """Target state emitted by memory controller for a proposal.
+
+    Note: `update` and `supersedes` are aliases referring to the previous memory
+    item ID being replaced/superseded. Setting either will populate both.
+    """
+
     exists: bool
     visibility: Visibility
     target_recipients: tuple = ()  # authorized recipient agent IDs
@@ -84,6 +89,11 @@ class MemoryCard:
 
 @dataclass(frozen=True)
 class MemoryItem:
+    """Materialized memory item stored in MemoryBank.
+
+    Note: `update` and `supersedes` are aliases referencing the superseded memory ID.
+    """
+
     memory_id: str
     proposal_id: str
     task_id: str

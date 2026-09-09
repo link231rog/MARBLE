@@ -32,6 +32,7 @@ def api_generate_fn(
     timeout: Optional[float] = None,
 ) -> Callable[[str], str]:
     import os
+
     from openai import OpenAI
 
     eff_timeout = (
@@ -45,8 +46,8 @@ def api_generate_fn(
         or os.environ.get("MARBLE_CONTROLLER_DISABLE_THINKING", "") in ("1", "true", "True")
     )
 
-    import time
     import logging
+    import time
 
     logger = logging.getLogger(__name__)
 
@@ -502,6 +503,7 @@ def train_qwen_sft(
         raise ValueError("sample_weights must be non-negative")
 
     import torch
+    from peft import LoraConfig, get_peft_model
     from torch.utils.data import Dataset
     from transformers import (
         AutoModelForCausalLM,
@@ -509,7 +511,6 @@ def train_qwen_sft(
         Trainer,
         TrainingArguments,
     )
-    from peft import LoraConfig, get_peft_model
 
     local_only = _hf_local_files_only()
     tok = AutoTokenizer.from_pretrained(base_model, local_files_only=local_only)
@@ -627,9 +628,9 @@ def train_qwen_rl(
         )
 
     import torch
+    from peft import LoraConfig, PeftModel, get_peft_model
     from torch.utils.data import DataLoader
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from peft import LoraConfig, PeftModel, get_peft_model
 
     if seed is not None:
         torch.manual_seed(seed)

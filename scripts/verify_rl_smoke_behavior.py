@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
 import json
-import os
 import sys
 from pathlib import Path
-from marble.experiments.evaluate import evaluate_memory_trace
+
 from marble.controllers.qwen_lora import load_qwen_rl_samples
+from marble.experiments.evaluate import evaluate_memory_trace
+
 
 def main():
     if len(sys.argv) > 1:
@@ -105,7 +107,7 @@ def main():
                 v = "targeted"
             else:
                 v = str(raw_v or "unknown")
-        except:
+        except Exception:
             v = "err"
         adv_by_vis.setdefault(v, []).append(s["advantage"])
 

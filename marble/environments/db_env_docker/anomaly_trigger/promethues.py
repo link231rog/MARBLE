@@ -1,4 +1,5 @@
 import os
+
 import requests
 
 # Prometheus的API URL

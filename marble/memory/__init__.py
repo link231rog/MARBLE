@@ -1,5 +1,5 @@
-from .base_memory import BaseMemory
 from .bank import MemoryBank
+from .base_memory import BaseMemory
 from .governed_memory import GovernedMemory
 from .memory_r1 import MemoryR1Memory
 from .memory_r1_adapter import MemoryR1Adapter

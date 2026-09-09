@@ -25,31 +25,26 @@ try:
 except ImportError:
     pass
 
-
-class TaskTimeoutError(BaseException):
-    """Raised when an episode execution exceeds the allowed task timeout."""
-    pass
-
 from marble.benchmarks import BENCHMARKS, BenchmarkTask, load_tasks
 from marble.controllers import (
     AbsentController,
     GlobalAlwaysController,
     HeuristicController,
-    LTSStyleController,
     LocalPolicyController,
+    LTSStyleController,
     PrivateOnlyController,
+)
+from marble.experiments.ablations import apply_to_task_config as apply_to_task_config
+from marble.experiments.ablations import (
+    controller_kwargs,
+    parse_ablation,
+    reward_override,
+    wrap_controller,
 )
 from marble.experiments.baselines import (
     MAIN_BASELINES,
     baseline_spec,
     canonical_baseline,
-)
-from marble.experiments.ablations import (
-    apply_to_task_config,
-    controller_kwargs,
-    parse_ablation,
-    reward_override,
-    wrap_controller,
 )
 from marble.experiments.engine_bridge import MemoryStep, build_governed_engine_cls
 from marble.experiments.task_manifest import load_manifest_tasks, read_manifest
@@ -65,6 +60,11 @@ from marble.memory.rewards import measured_memory_cost, token_count
 
 # Kept as the public runner constant for existing callers/tests.
 BASELINES = MAIN_BASELINES
+
+
+class TaskTimeoutError(BaseException):
+    """Raised when an episode execution exceeds the allowed task timeout."""
+    pass
 
 # ponytail: dataset llm is often ""; workers run through litellm, so a missing
 # model string must not reach BaseAgent as "". Fall back to an env-overridable
