@@ -27,8 +27,9 @@ class MemoryBank:
     ) -> Optional[MemoryItem]:
         if proposal.task_id == "":
             raise ValueError("proposal task_id must not be empty")
-        if target.supersedes is not None:
-            self._validate_supersession(proposal, target.supersedes)
+        update_target = target.update if target.update is not None else target.supersedes
+        if update_target is not None:
+            self._validate_update(proposal, update_target)
         if not target.exists:
             return None
 
@@ -49,7 +50,8 @@ class MemoryBank:
                 source=proposal.source,
                 step_index=proposal.step_index,
                 active=True,
-                supersedes=target.supersedes,
+                supersedes=update_target,
+                update=update_target,
                 created_at=self._clock,
                 summary=proposal.raw_value[:200],
                 topics=proposal.topics,
@@ -57,9 +59,9 @@ class MemoryBank:
             )
             self._items[memory_id] = item
             self._proposal_to_memory[proposal.proposal_id] = memory_id
-            if target.supersedes is not None:
-                old_item = self._items[target.supersedes]
-                self._items[target.supersedes] = MemoryItem(
+            if update_target is not None:
+                old_item = self._items[update_target]
+                self._items[update_target] = MemoryItem(
                     memory_id=old_item.memory_id,
                     proposal_id=old_item.proposal_id,
                     task_id=old_item.task_id,
@@ -71,6 +73,7 @@ class MemoryBank:
                     step_index=old_item.step_index,
                     active=False,
                     supersedes=old_item.supersedes,
+                    update=old_item.update,
                     created_at=old_item.created_at,
                     summary=old_item.summary,
                     topics=old_item.topics,
@@ -125,3 +128,5 @@ class MemoryBank:
                 raise ValueError("cannot supersede inactive memory")
             if old_item.task_id != proposal.task_id:
                 raise ValueError("memory task_id does not match proposal task_id")
+
+    _validate_update = _validate_supersession

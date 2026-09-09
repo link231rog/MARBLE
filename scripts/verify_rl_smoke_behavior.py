@@ -6,7 +6,10 @@ from marble.experiments.evaluate import evaluate_memory_trace
 from marble.controllers.qwen_lora import load_qwen_rl_samples
 
 def main():
-    rollout_dir = Path("runs/rl_smoke_check")
+    if len(sys.argv) > 1:
+        rollout_dir = Path(sys.argv[1])
+    else:
+        rollout_dir = Path("runs/grpo_recovery_smoke_20260909") if Path("runs/grpo_recovery_smoke_20260909").exists() else Path("runs/rl_smoke_check")
     traces = sorted(rollout_dir.glob("**/memory_trace.jsonl"))
     print(f"Found {len(traces)} traces in {rollout_dir}")
     if not traces:
@@ -56,11 +59,11 @@ def main():
         print(f"  {vis.upper():<10}: {count:>4} ({pct:.1f}%)")
 
     has_absent = vis_counts.get("absent", 0) > 0
-    has_private = (vis_counts.get("private", 0) + vis_counts.get("targeted", 0)) > 0
+    has_targeted = (vis_counts.get("private", 0) + vis_counts.get("targeted", 0)) > 0
     has_global = vis_counts.get("global", 0) > 0
-    # In collaborative tasks (DB, Coding, Research), ABSENT (filter) and GLOBAL (share) are the essential modalities.
-    criterion_1 = has_absent and has_global
-    print(f"\n  -> Criterion 1 (Active filtering & sharing: ABSENT={has_absent}, GLOBAL={has_global}): {'✅ PASSED' if criterion_1 else '❌ FAILED'}")
+    # Spec §12.3 & Chapter 7: ABSENT (filter), GLOBAL (share), and TARGETED (route) must all exist.
+    criterion_1 = has_absent and has_global and has_targeted
+    print(f"\n  -> Criterion 1 (Active filtering, sharing & targeting: ABSENT={has_absent}, GLOBAL={has_global}, TARGETED={has_targeted}): {'✅ PASSED' if criterion_1 else '❌ FAILED'}")
 
     print("\n========================================================")
     print("📊 SMOKE CHECK 2: Collaboration & Productive Reads")
@@ -145,15 +148,15 @@ def main():
     gate_3 = pos_global or pos_private
     print(f"  [Gate 3] Real Positive Shared Samples (Global/Targeted): {'✅ PASSED' if gate_3 else '❌ FAILED'} (Global_pos={pos_global}, Private_pos={pos_private})")
 
-    # Gate 4: Target recipients not all empty or healthy sharing
+    # Gate 4: Target recipients not all empty (Chapter 7 Section 4.2 / Section 8.4)
     total_target_recipients = sum(
         1 for t in traces
         for line in t.read_text(encoding="utf-8").splitlines()
         if '"target_recipients"' in line and '"target_recipients": []' not in line and '"target_recipients": ()' not in line
     )
-    # Passed if targeted routing is verified or active global collaboration exists
-    gate_4 = total_target_recipients > 0 or vis_counts.get("global", 0) > 50
-    print(f"  [Gate 4] Target Recipients / Route Verified:            {'✅ PASSED' if gate_4 else '❌ FAILED'} (instances: {total_target_recipients}, global: {vis_counts.get('global', 0)})")
+    # Passed strictly if targeted routing is verified with real non-empty recipients
+    gate_4 = total_target_recipients > 0
+    print(f"  [Gate 4] Target Recipients / Route Verified:            {'✅ PASSED' if gate_4 else '❌ FAILED'} (instances: {total_target_recipients})")
 
     # Gate 5: Trajectory reward monotonically / positively correlated with task score
     net_rewards = []

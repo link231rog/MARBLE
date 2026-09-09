@@ -46,7 +46,8 @@ def _as_memory_item(d: Dict[str, Any]) -> MemoryItem | None:
             source=str(d.get("source") or "worker"),
             step_index=int(d.get("step_index") or 0),
             active=bool(d.get("active", True)),
-            supersedes=d.get("supersedes"),
+            supersedes=d.get("update", d.get("supersedes")),
+            update=d.get("update", d.get("supersedes")),
             created_at=int(d.get("created_at") or 0),
             target_recipients=tuple(d.get("target_recipients") or ()),
         )

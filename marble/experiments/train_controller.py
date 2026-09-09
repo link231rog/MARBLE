@@ -216,6 +216,8 @@ if __name__ == "__main__":
                         help="SimPO card budget threshold for density penalty")
     parser.add_argument("--anchor-coeff", type=float, default=0.005,
                         help="SFT anchor coefficient to prevent covariate drift")
+    parser.add_argument("--max-len", type=int, default=4096,
+                        help="maximum sequence length for controller training")
     args = parser.parse_args()
     mode = {"sft": "linear_sft", "rl": "linear_rl"}.get(args.mode, args.mode)
     if mode in ("linear_sft", "qwen_sft"):
@@ -236,7 +238,9 @@ if __name__ == "__main__":
         from marble.controllers import qwen_lora
 
         pairs = qwen_lora.export_sft_pairs(trace_paths)
-        qwen_lora.train_qwen_sft(pairs, args.out, args.base_model, epochs=args.epochs)
+        qwen_lora.train_qwen_sft(
+            pairs, args.out, args.base_model, epochs=args.epochs, max_len=args.max_len
+        )
     elif mode == "qwen_rl":
         from marble.controllers import qwen_lora
 
@@ -252,7 +256,7 @@ if __name__ == "__main__":
         epochs = 1 if args.epochs == 20 else args.epochs
         qwen_lora.train_qwen_rl(
             trace_paths, args.out, args.base_model, rewards=rewards,
-            epochs=epochs, init_checkpoint=args.init,
+            epochs=epochs, init_checkpoint=args.init, max_len=args.max_len,
         )
     elif mode == "linear_rl":
         from marble.controllers.rl_controller import train_rl

@@ -213,8 +213,10 @@ def export_sft_pairs(
                     vis_val = recipients if recipients else "private"
                 else:
                     vis_val = vis
+                update_key = "update" if "update" in tgt else "supersedes"
+                update_val = tgt.get("update") if "update" in tgt else tgt.get("supersedes")
                 completion = json.dumps(
-                    {"visibility": vis_val, "supersedes": tgt.get("supersedes")}
+                    {"visibility": vis_val, update_key: update_val}
                 )
                 prompt = ev.get("controller_prompt")
                 if not isinstance(prompt, str) or not prompt.strip():
@@ -225,7 +227,7 @@ def export_sft_pairs(
 
 def audit_sft_distribution(pairs: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
     """Audit distribution of SFT action labels without artificial quota forcing (spec §12.1 rule 8, §12.3 R11)."""
-    counts = {"absent": 0, "private": 0, "global": 0, "invalid": 0}
+    counts = {"absent": 0, "private": 0, "targeted": 0, "global": 0, "invalid": 0}
     for _, completion in pairs:
         try:
             parsed = json.loads(completion)
@@ -233,8 +235,10 @@ def audit_sft_distribution(pairs: Sequence[Tuple[str, str]]) -> Dict[str, Any]:
             if vis in ("absent", "global"):
                 counts[vis] += 1
             elif isinstance(vis, list) and len(vis) > 0:
+                counts["targeted"] += 1
                 counts["private"] += 1
             elif vis in ("private", "targeted"):
+                counts["targeted"] += 1
                 counts["private"] += 1
             else:
                 counts["invalid"] += 1
@@ -276,10 +280,11 @@ def completion_only_example(
 
     # Preserve the target whenever the full pair does not fit. Prompt context
     # can be shortened; silently dropping the supervised JSON cannot train a
-    # controller.
+    # controller. Crucially, preserve the head containing [SYSTEM] instructions
+    # and action space schema rather than discarding them.
     completion_ids = completion_ids[:max_len]
     prompt_budget = max_len - len(completion_ids)
-    prompt_ids = prompt_ids[-prompt_budget:] if prompt_budget else []
+    prompt_ids = prompt_ids[:prompt_budget] if prompt_budget else []
     input_ids = prompt_ids + completion_ids
     labels = [-100] * len(prompt_ids) + completion_ids
     return {
@@ -485,7 +490,7 @@ def train_qwen_sft(
     epochs: int = 3,
     lr: float = 1e-4,
     lora_r: int = 16,
-    max_len: int = 512,
+    max_len: int = 4096,
     sample_weights: Optional[List[float]] = None,
 ) -> str:
     """Real LoRA SFT over (prompt, completion) pairs using peft + transformers."""
@@ -559,6 +564,8 @@ def train_qwen_sft(
         per_device_train_batch_size=1, logging_steps=1, save_strategy="no",
         remove_unused_columns=False,
         report_to=[],
+        seed=42,
+        data_seed=42,
     )
     trainer = _WeightedTrainer(
         model=model,
@@ -594,7 +601,7 @@ def train_qwen_rl(
     epochs: int = 1,
     lr: float = 1e-4,
     lora_r: int = 16,
-    max_len: int = 512,
+    max_len: int = 4096,
     init_checkpoint: Optional[str] = None,
     sft_reference_checkpoint: Optional[str] = None,
     max_grad_norm: float = 1.0,

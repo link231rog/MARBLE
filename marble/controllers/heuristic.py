@@ -24,7 +24,7 @@ _NON_SUPERSEDABLE_TITLES = {
 }
 
 
-def _find_supersedes(
+def _find_update_target(
     proposal: MemoryProposal,
     current_state: Sequence[MemoryItem],
 ) -> Optional[str]:
@@ -41,6 +41,8 @@ def _find_supersedes(
             return item.memory_id
     return None
 
+_find_supersedes = _find_update_target
+
 
 class GlobalAlwaysController:
     """Admit every proposal as global memory."""
@@ -50,11 +52,13 @@ class GlobalAlwaysController:
         proposal: MemoryProposal,
         current_state: Sequence[MemoryItem],
     ) -> MemoryTargetState:
+        up = _find_update_target(proposal, current_state)
         return MemoryTargetState(
             exists=True,
             visibility="global",
             target_recipients=(),
-            supersedes=_find_supersedes(proposal, current_state),
+            supersedes=up,
+            update=up,
         )
 
 
@@ -77,11 +81,13 @@ class PrivateOnlyController:
         proposal: MemoryProposal,
         current_state: Sequence[MemoryItem],
     ) -> MemoryTargetState:
+        up = _find_update_target(proposal, current_state)
         return MemoryTargetState(
             exists=True,
             visibility="targeted",
             target_recipients=(proposal.agent_id,),
-            supersedes=_find_supersedes(proposal, current_state),
+            supersedes=up,
+            update=up,
         )
 
 
@@ -110,6 +116,7 @@ class LTSStyleController:
         if title in {"empty observation", "none", "noop"} or "local" in title or "scratch" in title:
             return MemoryTargetState(False, "absent")
 
+        up = _find_update_target(proposal, current_state)
         if self.judge_fn is not None:
             try:
                 admitted = self.judge_fn(proposal)
@@ -118,7 +125,8 @@ class LTSStyleController:
                 return MemoryTargetState(
                     True,
                     "global",
-                    supersedes=_find_supersedes(proposal, current_state),
+                    supersedes=up,
+                    update=up,
                 )
             except Exception:
                 pass  # Fall back to signal match
@@ -128,7 +136,8 @@ class LTSStyleController:
         return MemoryTargetState(
             True,
             "global",
-            supersedes=_find_supersedes(proposal, current_state),
+            supersedes=up,
+            update=up,
         )
 
 
@@ -140,14 +149,15 @@ class HeuristicController:
         proposal: MemoryProposal,
         current_state: Sequence[MemoryItem],
     ) -> MemoryTargetState:
-        supersedes = _find_supersedes(proposal, current_state)
+        up = _find_update_target(proposal, current_state)
         if not proposal.raw_value.strip():
             return MemoryTargetState(False, "absent")
         if _SHARED_SIGNALS.search(proposal.title):
-            return MemoryTargetState(True, "global", target_recipients=(), supersedes=supersedes)
+            return MemoryTargetState(True, "global", target_recipients=(), supersedes=up, update=up)
         return MemoryTargetState(
             True,
             "targeted",
             target_recipients=(proposal.agent_id,),
-            supersedes=supersedes,
+            supersedes=up,
+            update=up,
         )

@@ -75,8 +75,8 @@ class JsonController:
             f"topic_taxonomy: {list(TOPIC_TAXONOMY)}",
             "visibility: absent removes memory; global exposes to all agents; a JSON array of agent IDs (e.g. "
             f'{example_agent_1} or {example_agent_2}) from agent_role_map routes strictly to those agents.',
-            "supersedes: use an exact active memory_id only when replacing that memory.",
-            'output: ONLY {"visibility": "absent"|"global"|["<agent_id>", ...], "supersedes": null}.',
+            "update: use an exact active memory_id only when updating that memory.",
+            'output: ONLY {"visibility": "absent"|"global"|["<agent_id>", ...], "update": null}.',
         ]
 
         # [TASK] — task context, present in all variants
@@ -141,11 +141,11 @@ class JsonController:
         visibility = parsed["visibility"]
         if visibility == "absent":
             return MemoryTargetState(exists=False, visibility="absent")
-        supersedes = parsed.get("supersedes")
-        # input ablation: active memory hidden -> controller may not supersede
+        update_target = parsed.get("update") if "update" in parsed else parsed.get("supersedes")
+        # input ablation: active memory hidden -> controller may not update
         if "active_memory_index" in self.drop_fields:
-            supersedes = None
-        resolved = _resolve_supersedes(supersedes, current_state, proposal)
+            update_target = None
+        resolved = _resolve_supersedes(update_target, current_state, proposal)
 
         if visibility == "global":
             return MemoryTargetState(
@@ -153,6 +153,7 @@ class JsonController:
                 visibility="global",
                 target_recipients=(),
                 supersedes=resolved,
+                update=resolved,
             )
         elif isinstance(visibility, list):
             recipients = tuple(sorted(set(visibility)))
@@ -161,6 +162,7 @@ class JsonController:
                 visibility="targeted",
                 target_recipients=recipients,
                 supersedes=resolved,
+                update=resolved,
             )
         else:
             return MemoryTargetState(exists=False, visibility="absent")
@@ -178,8 +180,9 @@ class JsonController:
             return f"not valid JSON: {exc}"
         if not isinstance(parsed, dict):
             return "not a JSON object"
-        if set(parsed) != {"visibility", "supersedes"}:
-            return f"expected exactly keys visibility/supersedes, got {sorted(parsed)}"
+        allowed_key_sets = ({"visibility", "update"}, {"visibility", "supersedes"})
+        if set(parsed) not in allowed_key_sets:
+            return f"expected exactly keys visibility/update, got {sorted(parsed)}"
         visibility = parsed["visibility"]
         if visibility not in ("absent", "global"):
             if not isinstance(visibility, list):
@@ -197,13 +200,13 @@ class JsonController:
                 for aid in visibility:
                     if not isinstance(aid, str):
                         return f"recipient agent_id {aid!r} must be a string"
-        supersedes = parsed["supersedes"]
+        update_target = parsed.get("update") if "update" in parsed else parsed.get("supersedes")
         if visibility == "absent":
-            if supersedes is not None:
-                return "absent decision must have null supersedes"
+            if update_target is not None:
+                return "absent decision must have null update (null supersedes)"
             return None
-        if supersedes is not None and _resolve_supersedes(supersedes, current_state, proposal) is None:
-            return f"supersedes target not found among active items: {supersedes!r}"
+        if update_target is not None and _resolve_supersedes(update_target, current_state, proposal) is None:
+            return f"update target not found among active items: {update_target!r}"
         return None
 
 

@@ -35,7 +35,7 @@ def parse_ablation(spec: str) -> tuple:
 
 
 class NoSupersede:
-    """Wraps a controller; forces supersedes=None (state-update ablation)."""
+    """Wraps a controller; forces update=None/supersedes=None (state-update ablation)."""
 
     def __init__(self, inner):
         self.inner = inner
@@ -47,10 +47,14 @@ class NoSupersede:
             visibility=target.visibility,
             target_recipients=getattr(target, "target_recipients", ()),
             supersedes=None,
+            update=None,
         )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
+
+
+NoUpdate = NoSupersede
 
 
 class PrivateToGlobal:
@@ -71,6 +75,7 @@ class PrivateToGlobal:
             visibility=vis,
             target_recipients=target_recipients,
             supersedes=target.supersedes,
+            update=target.update,
         )
 
     def __getattr__(self, name: str) -> Any:

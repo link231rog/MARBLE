@@ -41,6 +41,7 @@ PORT_OFFSET=0
 SEED="42"
 GPU1_ON_DEMAND="${MARBLE_GPU1_ON_DEMAND:-0}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-0}"
+QWEN_TEMP="${QWEN_TEMP:-}"
 
 # Parse CLI options
 while [[ $# -gt 0 ]]; do
@@ -125,6 +126,10 @@ while [[ $# -gt 0 ]]; do
         --qwen-api-base)
             QWEN_API_BASE="$2"
             export MARBLE_QWEN_API_BASES="$2"
+            shift 2
+            ;;
+        --qwen-temperature)
+            QWEN_TEMP="$2"
             shift 2
             ;;
         *)
@@ -296,6 +301,7 @@ launch_db_worker() {
         [ -n "$q_base" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-base $q_base"
         [ -n "$q_model" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-model $q_model"
         [ -n "$q_key" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-key $q_key"
+        [ -n "$QWEN_TEMP" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-temperature $QWEN_TEMP"
 
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))
@@ -369,6 +375,7 @@ launch_research_worker() {
         [ -n "$q_base" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-base $q_base"
         [ -n "$q_model" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-model $q_model"
         [ -n "$q_key" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-key $q_key"
+        [ -n "$QWEN_TEMP" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-temperature $QWEN_TEMP"
 
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))
@@ -436,6 +443,7 @@ launch_coding_worker() {
         [ -n "$q_base" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-base $q_base"
         [ -n "$q_model" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-model $q_model"
         [ -n "$q_key" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-api-key $q_key"
+        [ -n "$QWEN_TEMP" ] && EXTRA_ARGS="$EXTRA_ARGS --qwen-temperature $QWEN_TEMP"
 
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))

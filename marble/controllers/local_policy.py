@@ -265,15 +265,17 @@ class LocalPolicyController:
                 visibility="absent",
                 target_recipients=(),
                 supersedes=None,
+                update=None,
             )
 
-        supersedes = _find_supersedes(proposal, current_state)
+        update_target = _find_supersedes(proposal, current_state)
         if best_key == "global":
             return MemoryTargetState(
                 exists=True,
                 visibility="global",
                 target_recipients=(),
-                supersedes=supersedes,
+                supersedes=update_target,
+                update=update_target,
             )
 
         if best_key == "targeted":
@@ -286,7 +288,8 @@ class LocalPolicyController:
             exists=True,
             visibility="targeted",
             target_recipients=chosen_recipients,
-            supersedes=supersedes,
+            supersedes=update_target,
+            update=update_target,
         )
 
     def update(

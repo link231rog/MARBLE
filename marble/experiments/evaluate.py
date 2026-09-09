@@ -128,15 +128,16 @@ def evaluate_memory_trace(
         by_vis[vis] = by_vis.get(vis, 0) + 1
         owners[e["memory_id"]] = e["proposal"]["agent_id"]
         visibilities[e["memory_id"]] = vis
-        if e["target"].get("supersedes"):
-            superseded_ids.add(e["target"]["supersedes"])
+        update_target = e["target"].get("update") or e["target"].get("supersedes")
+        if update_target:
+            superseded_ids.add(update_target)
         memory_id = e["memory_id"]
         active_items[memory_id] = {
             "visibility": vis,
             "tokens": token_count(e["proposal"].get("raw_value", "")),
         }
-        if e["target"].get("supersedes"):
-            active_items.pop(e["target"]["supersedes"], None)
+        if update_target:
+            active_items.pop(update_target, None)
     for e in r1_operations:
         operation = e.get("operation")
         memory_id = e.get("memory_id")
@@ -313,6 +314,7 @@ def evaluate_memory_trace(
         "private": targeted_written,
         "targeted": targeted_written,
         "global": by_vis.get("global", 0),
+        "updates": len(superseded_ids),
         "supersessions": len(superseded_ids),
         "r1_adds": sum(1 for e in r1_operations if e.get("operation") == "ADD"),
         "r1_updates": sum(1 for e in r1_operations if e.get("operation") == "UPDATE"),

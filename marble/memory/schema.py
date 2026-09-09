@@ -40,8 +40,13 @@ class MemoryTargetState:
     visibility: Visibility
     target_recipients: tuple = ()  # authorized recipient agent IDs
     supersedes: Optional[str] = None
+    update: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if self.update is not None and self.supersedes is None:
+            object.__setattr__(self, "supersedes", self.update)
+        elif self.supersedes is not None and self.update is None:
+            object.__setattr__(self, "update", self.supersedes)
         if self.visibility not in ("absent", "global", "targeted"):
             raise ValueError("visibility must be absent, global, or targeted")
         if self.visibility == "absent" and self.exists:
@@ -56,12 +61,15 @@ class MemoryTargetState:
         cls,
         recipients: tuple | list,
         supersedes: Optional[str] = None,
+        update: Optional[str] = None,
     ) -> MemoryTargetState:
+        up = update if update is not None else supersedes
         return cls(
             exists=True,
             visibility="targeted",
             target_recipients=tuple(sorted(set(recipients))),
-            supersedes=supersedes,
+            supersedes=up,
+            update=up,
         )
 
 
@@ -91,6 +99,13 @@ class MemoryItem:
     summary: str = ""
     topics: tuple = ()
     target_recipients: tuple = ()
+    update: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.update is not None and self.supersedes is None:
+            object.__setattr__(self, "supersedes", self.update)
+        elif self.supersedes is not None and self.update is None:
+            object.__setattr__(self, "update", self.supersedes)
 
     def card(self) -> MemoryCard:
         return MemoryCard(

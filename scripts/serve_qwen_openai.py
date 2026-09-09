@@ -37,6 +37,7 @@ if not scale_env:
 ADAPTER_MAP: Dict[str, str] = {}
 if scale_env == "4b":
     ADAPTER_MAP = {
+        "qwen_sft_v2": "/data/home/huangzixuan/MARBLE/runs/checkpoints/qwen_sft_v2",
         "qwen_sft": "/data/home/huangzixuan/MARBLE/runs/checkpoints/qwen_sft",
         "qwen_rl": "/data/home/huangzixuan/MARBLE/runs/checkpoints/qwen_rl",
         "qwen_4b_sft": "/data/home/huangzixuan/MARBLE/runs/checkpoints/controller_scaling/qwen_4b_sft",
