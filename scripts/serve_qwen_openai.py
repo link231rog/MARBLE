@@ -265,6 +265,25 @@ async def chat_completions(req: ChatCompletionRequest):
                         tok_str = tokenizer.decode([tok_id])
                         lp = float(torch.nn.functional.log_softmax(score[0], dim=-1)[tok_id].item())
                         content_logprobs.append({"token": tok_str, "logprob": lp})
+
+                # If raw_output was cleaned (e.g. markdown fences or extra whitespace removed),
+                # filter content_logprobs so they align strictly with clean_output tokens
+                full_decoded = "".join(item["token"] for item in content_logprobs)
+                if clean_output != full_decoded and clean_output in full_decoded:
+                    start_char = full_decoded.find(clean_output)
+                    end_char = start_char + len(clean_output)
+                    matched_lps = []
+                    curr_pos = 0
+                    for item in content_logprobs:
+                        tok_len = len(item["token"])
+                        tok_start = curr_pos
+                        tok_end = curr_pos + tok_len
+                        curr_pos = tok_end
+                        if tok_end > start_char and tok_start < end_char:
+                            matched_lps.append(item)
+                    if matched_lps:
+                        content_logprobs = matched_lps
+
                 choice_obj["logprobs"] = {"content": content_logprobs}
 
             return {

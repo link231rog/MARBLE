@@ -19,7 +19,19 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-UV="${UV:-$(command -v uv || echo "uv")}"
+if [ -n "${PYTHON_BIN:-}" ]; then
+    RUN_PY="$PYTHON_BIN"
+elif [ -f "/data/home/huangzixuan/miniconda3/envs/sigir/bin/python" ]; then
+    RUN_PY="/data/home/huangzixuan/miniconda3/envs/sigir/bin/python"
+elif [ -n "${CONDA_PREFIX:-}" ] && [ -f "$CONDA_PREFIX/bin/python" ]; then
+    RUN_PY="$CONDA_PREFIX/bin/python"
+elif command -v uv >/dev/null 2>&1 && [ -f "$REPO_DIR/.venv/bin/python" ]; then
+    RUN_PY="uv run python"
+elif [ -f "$REPO_DIR/.venv/bin/python" ]; then
+    RUN_PY="$REPO_DIR/.venv/bin/python"
+else
+    RUN_PY="python3"
+fi
 MANIFEST="configs/experiments/multiagentbench_hard_frozen.json"
 
 # Default arguments
@@ -28,7 +40,7 @@ SPLIT="test_hard"
 BENCHMARK_TARGET="all"
 MAX_CARDS=5
 MAX_ITERATIONS=5
-CONCURRENCY="${CONCURRENCY:-8}"
+CONCURRENCY="${CONCURRENCY:-16}"
 ENABLE_COMM_GOV=""
 DRY_RUN="${DRY_RUN:-}"
 OUT_DIR=""
@@ -36,6 +48,7 @@ CONTROLLER_CHECKPOINT=""
 LAMBDA="0.15"
 BETA="0.25"
 ABLATION=""
+MARBLE_DB_RUNTIME="${MARBLE_DB_RUNTIME:-auto}"
 
 PORT_OFFSET=0
 SEED="42"
@@ -46,6 +59,10 @@ QWEN_TEMP="${QWEN_TEMP:-}"
 # Parse CLI options
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --db-runtime)
+            MARBLE_DB_RUNTIME="$2"
+            shift 2
+            ;;
         --task-timeout)
             TASK_TIMEOUT="$2"
             shift 2
@@ -166,43 +183,60 @@ echo "  Port Offset: $PORT_OFFSET"
 echo "  Output Dir:  $OUT_DIR"
 [ -n "$CONTROLLER_CHECKPOINT" ] && echo "  Checkpoint:  $CONTROLLER_CHECKPOINT"
 [ -n "$ABLATION" ] && echo "  Ablation:    $ABLATION"
+
+# Resolve Database runtime (native userland vs docker compose)
+if [ "$MARBLE_DB_RUNTIME" == "native" ]; then
+    DB_RUNTIME="native"
+elif [ "$MARBLE_DB_RUNTIME" == "docker" ]; then
+    DB_RUNTIME="docker"
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    DB_RUNTIME="docker"
+else
+    DB_RUNTIME="native"
+fi
+echo "  DB Runtime:  $DB_RUNTIME"
+
 # Robust vLLM endpoint resolution for 'ours_*' baselines
 if [[ "$BASELINE" =~ ^ours_ ]]; then
-    TARGET_BASE="${QWEN_API_BASE:-http://127.0.0.1:18000/v1}"
-    if [ "$TARGET_BASE" == "http://127.0.0.1:18000/v1" ]; then
-        echo "⚡ Checking local/GPU1 vLLM health on $TARGET_BASE..."
-        HEALTH_OK=false
-        for attempt in 1 2 3 4 5; do
-            if curl -s --connect-timeout 3 "$TARGET_BASE/health" >/dev/null 2>&1; then
-                HEALTH_OK=true
-                break
-            fi
-            sleep 1
-        done
-
-        if [ "$HEALTH_OK" = true ]; then
-            echo "⚡ Detected active GPU1 vLLM on $TARGET_BASE."
-            export MARBLE_QWEN_API_KEYS="EMPTY"
-            export MARBLE_QWEN_API_BASES="$TARGET_BASE"
-            if [ -z "${QWEN_API_MODEL:-}" ]; then
-                if [ "$BASELINE" == "ours_sft" ]; then
-                    export MARBLE_QWEN_API_MODELS="qwen_sft"
-                elif [ "$BASELINE" == "ours_rl" ] || [ "$BASELINE" == "ours_private_to_global" ]; then
-                    export MARBLE_QWEN_API_MODELS="qwen_rl"
-                else
-                    export MARBLE_QWEN_API_MODELS="Qwen/Qwen3.5-4B"
-                fi
-            else
-                export MARBLE_QWEN_API_MODELS="$QWEN_API_MODEL"
-            fi
+    if [ -z "${QWEN_API_BASE:-}" ]; then
+        if curl -s --connect-timeout 2 "http://127.0.0.1:8000/v1/health" >/dev/null 2>&1; then
+            TARGET_BASE="http://127.0.0.1:8000/v1"
         else
-            echo "❌ [FATAL ERROR] Baseline '$BASELINE' requires controller endpoint at $TARGET_BASE, but health check failed!" >&2
-            echo "   Please ensure the SSH tunnel (127.0.0.1:18000 -> GPU1:8000) and vLLM server are running." >&2
-            exit 1
+            TARGET_BASE="http://127.0.0.1:18000/v1"
         fi
     else
+        TARGET_BASE="$QWEN_API_BASE"
+    fi
+
+    echo "⚡ Checking vLLM health on $TARGET_BASE..."
+    HEALTH_OK=false
+    for attempt in 1 2 3 4 5; do
+        if curl -s --connect-timeout 3 "$TARGET_BASE/health" >/dev/null 2>&1; then
+            HEALTH_OK=true
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$HEALTH_OK" = true ]; then
+        echo "⚡ Detected active vLLM on $TARGET_BASE."
+        export MARBLE_QWEN_API_KEYS="EMPTY"
         export MARBLE_QWEN_API_BASES="$TARGET_BASE"
-        [ -n "${QWEN_API_MODEL:-}" ] && export MARBLE_QWEN_API_MODELS="$QWEN_API_MODEL"
+        if [ -z "${QWEN_API_MODEL:-}" ]; then
+            if [ "$BASELINE" == "ours_sft" ]; then
+                export MARBLE_QWEN_API_MODELS="qwen_sft"
+            elif [ "$BASELINE" == "ours_rl" ] || [ "$BASELINE" == "ours_private_to_global" ]; then
+                export MARBLE_QWEN_API_MODELS="qwen_rl"
+            else
+                export MARBLE_QWEN_API_MODELS="Qwen/Qwen3.5-4B"
+            fi
+        else
+            export MARBLE_QWEN_API_MODELS="$QWEN_API_MODEL"
+        fi
+    else
+        echo "❌ [FATAL ERROR] Baseline '$BASELINE' requires controller endpoint at $TARGET_BASE, but health check failed!" >&2
+        echo "   Please ensure vLLM is running (either directly on port 8000 or via SSH tunnel on port 18000)." >&2
+        exit 1
     fi
 fi
 
@@ -249,14 +283,14 @@ get_worker_key() {
 }
 
 # Determine Task IDs dynamically from frozen manifest based on Benchmark and Split
-read -r -a DB_TASKS <<< "$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='database'))" 2>/dev/null || echo "")"
-read -r -a RESEARCH_TASKS <<< "$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='research'))" 2>/dev/null || echo "")"
-read -r -a CODING_TASKS <<< "$(python3 -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='coding'))" 2>/dev/null || echo "")"
+read -r -a DB_TASKS <<< "$("$RUN_PY" -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='database'))" 2>/dev/null || echo "")"
+read -r -a RESEARCH_TASKS <<< "$("$RUN_PY" -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='research'))" 2>/dev/null || echo "")"
+read -r -a CODING_TASKS <<< "$("$RUN_PY" -c "import json; m=json.load(open('$MANIFEST')); print(' '.join(str(x['task_id']) for x in m['splits']['$SPLIT'] if x['benchmark']=='coding'))" 2>/dev/null || echo "")"
 
 echo "Loaded Tasks from Manifest ($MANIFEST, split: $SPLIT):"
-[ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ] && echo "  Database Tasks (${#DB_TASKS[@]}): ${DB_TASKS[*]}"
-[ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ] && echo "  Research Tasks (${#RESEARCH_TASKS[@]}): ${RESEARCH_TASKS[*]}"
-[ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ] && echo "  Coding Tasks   (${#CODING_TASKS[@]}): ${CODING_TASKS[*]}"
+[ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ] && echo "  Database Tasks (${#DB_TASKS[@]}): ${DB_TASKS[*]:-}"
+[ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ] && echo "  Research Tasks (${#RESEARCH_TASKS[@]}): ${RESEARCH_TASKS[*]:-}"
+[ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ] && echo "  Coding Tasks   (${#CODING_TASKS[@]}): ${CODING_TASKS[*]:-}"
 
 EXTRA_ARGS=""
 [ -n "$ENABLE_COMM_GOV" ] && EXTRA_ARGS="$EXTRA_ARGS $ENABLE_COMM_GOV"
@@ -281,8 +315,15 @@ launch_db_worker() {
     local w_key="$(get_worker_key "$worker_id")"
 
     (
-        trap 'docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true' EXIT INT TERM
+        if [ "$DB_RUNTIME" == "native" ]; then
+            trap '"$REPO_DIR/scripts/native_db_ctl.sh" down "$worker_id" >/dev/null 2>&1 || true' EXIT INT TERM
+        else
+            trap 'docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml down -v >/dev/null 2>&1 || true' EXIT INT TERM
+        fi
 
+        export MARBLE_DB_RUNTIME="$DB_RUNTIME"
+        export MARBLE_MANAGED_STACK="1"
+        export MARBLE_WORKER_ID="$worker_id"
         export MARBLE_DB_PORT="$db_port"
         export MARBLE_PROM_PORT="$prom_port"
         export MARBLE_NODE_PORT="$node_port"
@@ -306,17 +347,21 @@ launch_db_worker() {
         # Stagger worker start to eliminate burst thundering herd
         sleep $(( (worker_id % 8) * 2 ))
 
-        echo "[DB Worker $worker_id] Launching DB Task $task_id on ports (DB:$db_port, Prom:$prom_port)..."
+        echo "[DB Worker $worker_id] Launching DB Task $task_id ($DB_RUNTIME mode, DB:$db_port, Prom:$prom_port)..."
         if [ -n "$DRY_RUN" ]; then
-            echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark database --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+            echo "  [DRY RUN] Would execute: $RUN_PY -u -m marble.experiments.run_benchmark --benchmark database --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
         else
-            if ! docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml up -d >/dev/null 2>&1; then
-                sleep 4
-                docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml up -d >/dev/null 2>&1 || true
+            if [ "$DB_RUNTIME" == "native" ]; then
+                "$REPO_DIR/scripts/native_db_ctl.sh" up "$worker_id" "$db_port" "$prom_port" "$node_port" "$pg_exp_port" >/dev/null 2>&1 || true
+            else
+                if ! docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml up -d >/dev/null 2>&1; then
+                    sleep 4
+                    docker compose -p "$compose_proj" -f marble/environments/db_env_docker/docker-compose.yml up -d >/dev/null 2>&1 || true
+                fi
             fi
             sleep 2
 
-            if ! $UV run python -u -m marble.experiments.run_benchmark \
+            if ! $RUN_PY -u -m marble.experiments.run_benchmark \
                 --benchmark database \
                 --manifest "$MANIFEST" \
                 --split "$SPLIT" \
@@ -333,7 +378,7 @@ launch_db_worker() {
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"; then
                 echo "[DB Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
                 sleep 5
-                $UV run python -u -m marble.experiments.run_benchmark \
+                $RUN_PY -u -m marble.experiments.run_benchmark \
                     --benchmark database \
                     --manifest "$MANIFEST" \
                     --split "$SPLIT" \
@@ -382,9 +427,9 @@ launch_research_worker() {
 
         echo "[Research Worker $worker_id] Launching Research Task $task_id..."
         if [ -n "$DRY_RUN" ]; then
-            echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark research --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+            echo "  [DRY RUN] Would execute: $RUN_PY -u -m marble.experiments.run_benchmark --benchmark research --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
         else
-            if ! $UV run python -u -m marble.experiments.run_benchmark \
+            if ! $RUN_PY -u -m marble.experiments.run_benchmark \
                 --benchmark research \
                 --manifest "$MANIFEST" \
                 --split "$SPLIT" \
@@ -401,7 +446,7 @@ launch_research_worker() {
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"; then
                 echo "[Research Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
                 sleep 5
-                $UV run python -u -m marble.experiments.run_benchmark \
+                $RUN_PY -u -m marble.experiments.run_benchmark \
                     --benchmark research \
                     --manifest "$MANIFEST" \
                     --split "$SPLIT" \
@@ -450,9 +495,9 @@ launch_coding_worker() {
 
         echo "[Coding Worker $worker_id] Launching Coding Task $task_id..."
         if [ -n "$DRY_RUN" ]; then
-            echo "  [DRY RUN] Would execute: $UV run python -u -m marble.experiments.run_benchmark --benchmark coding --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
+            echo "  [DRY RUN] Would execute: $RUN_PY -u -m marble.experiments.run_benchmark --benchmark coding --manifest $MANIFEST --split $SPLIT --task-ids $task_id --baseline $BASELINE ..."
         else
-            if ! $UV run python -u -m marble.experiments.run_benchmark \
+            if ! $RUN_PY -u -m marble.experiments.run_benchmark \
                 --benchmark coding \
                 --manifest "$MANIFEST" \
                 --split "$SPLIT" \
@@ -469,7 +514,7 @@ launch_coding_worker() {
                 --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/coding_task_${task_id}_w${worker_id}.log"; then
                 echo "[Coding Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
                 sleep 5
-                $UV run python -u -m marble.experiments.run_benchmark \
+                $RUN_PY -u -m marble.experiments.run_benchmark \
                     --benchmark coding \
                     --manifest "$MANIFEST" \
                     --split "$SPLIT" \
@@ -503,18 +548,18 @@ mkdir -p "$OUT_DIR"
 
 # Enqueue all tasks: Database, Research, Coding
 if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
-    for tid in "${DB_TASKS[@]}"; do
-        echo "database:$tid" >> "$QUEUE_FILE"
+    for tid in ${DB_TASKS[@]+"${DB_TASKS[@]}"}; do
+        [ -n "$tid" ] && echo "database:$tid" >> "$QUEUE_FILE"
     done
 fi
 if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
-    for tid in "${RESEARCH_TASKS[@]}"; do
-        echo "research:$tid" >> "$QUEUE_FILE"
+    for tid in ${RESEARCH_TASKS[@]+"${RESEARCH_TASKS[@]}"}; do
+        [ -n "$tid" ] && echo "research:$tid" >> "$QUEUE_FILE"
     done
 fi
 if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ]; then
-    for tid in "${CODING_TASKS[@]}"; do
-        echo "coding:$tid" >> "$QUEUE_FILE"
+    for tid in ${CODING_TASKS[@]+"${CODING_TASKS[@]}"}; do
+        [ -n "$tid" ] && echo "coding:$tid" >> "$QUEUE_FILE"
     done
 fi
 
@@ -522,7 +567,7 @@ TOTAL_QUEUED=$(wc -l < "$QUEUE_FILE" | tr -d " ")
 echo "Loaded $TOTAL_QUEUED total tasks into Dynamic Worker Pool queue."
 
 pop_dynamic_task() {
-    python3 -c "
+    "$RUN_PY" -c "
 import fcntl, sys
 qfile = '$QUEUE_FILE'
 try:
@@ -553,6 +598,16 @@ worker_slot_loop() {
 
         local bench="${item%%:*}"
         local tid="${item##*:}"
+
+        # Fast-path idempotency: skip if already completed with status: ok
+        local sum_file="$(find "$OUT_DIR" -path "*/$bench/$tid/summary.json" 2>/dev/null | head -n 1)"
+        if [ -n "$sum_file" ] && [ -f "$sum_file" ]; then
+            if grep -q '"status": "ok"' "$sum_file" 2>/dev/null; then
+                echo "[Worker Pool Slot $slot_id] ⏭️ Task $bench $tid already completed (status=ok). Skipping."
+                continue
+            fi
+        fi
+
         echo "[Worker Pool Slot $slot_id] ==> Claimed task: $bench $tid"
         if [ "$bench" == "database" ]; then
             launch_db_worker "$tid" "$slot_id"
@@ -585,7 +640,7 @@ check_and_retry_missing_tasks() {
 
     while [ $attempt -le $max_retries ]; do
         local missing_json
-        missing_json="$(python3 -c "
+        missing_json="$("$RUN_PY" -c "
 import glob, json, sys
 
 manifest_path = '$MANIFEST'
@@ -628,8 +683,12 @@ print(json.dumps(missing))
         echo "   Cleaning docker sandboxes and retrying failed/rate-limited tasks..."
         echo "======================================================================"
 
-        [ -n "$(docker ps -q)" ] && docker rm -f $(docker ps -q) >/dev/null 2>&1 || true
-        docker volume prune -f >/dev/null 2>&1 || true
+        if [ "$DB_RUNTIME" == "native" ]; then
+            "$REPO_DIR/scripts/native_db_ctl.sh" cleanup_all >/dev/null 2>&1 || true
+        else
+            [ -n "$(docker ps -q 2>/dev/null)" ] && docker rm -f $(docker ps -q) >/dev/null 2>&1 || true
+            docker volume prune -f >/dev/null 2>&1 || true
+        fi
         sleep 4
 
         local db_w=0
@@ -649,7 +708,7 @@ print(json.dumps(missing))
                 launch_coding_worker "$tid" "$cod_w" &
                 cod_w=$(( cod_w + 1 ))
             fi
-        done < <(python3 -c "import json, sys; [print(f'{b} {t}') for b, t in json.loads('$missing_json')]")
+        done < <("$RUN_PY" -c "import json, sys; [print(f'{b} {t}') for b, t in json.loads('$missing_json')]")
 
         echo "⏳ Waiting for parallel retry tasks to complete..."
         wait || true
@@ -667,7 +726,7 @@ check_and_retry_missing_tasks
 echo "======================================================================"
 echo "📊 Aggregating Evaluation Results..."
 echo "======================================================================"
-$UV run python -m marble.experiments.evaluate \
+$RUN_PY -m marble.experiments.evaluate \
     --run-dir "$OUT_DIR" \
     --manifest "$MANIFEST" \
     --split "$SPLIT" || true

@@ -212,12 +212,26 @@ if __name__ == "__main__":
                         help="base model for Qwen LoRA training")
     parser.add_argument("--outcome-gated", action="store_true", default=True,
                         help="RLVR outcome-gating on auxiliary collaboration bonuses")
-    parser.add_argument("--target-card-budget", type=int, default=12,
+    parser.add_argument("--target-card-budget", type=int, default=20,
                         help="SimPO card budget threshold for density penalty")
+    parser.add_argument("--beta", type=float, default=0.75,
+                        help="cross-agent memory reuse multiplier")
+    parser.add_argument("--lambda-cost", type=float, default=0.005,
+                        help="memory communication cost penalty weight")
+    parser.add_argument("--target-bonus", type=float, default=0.50,
+                        help="bonus for targeted memory sharing hit")
+    parser.add_argument("--gamma-density", type=float, default=0.02,
+                        help="global card density penalty coefficient")
+    parser.add_argument("--harmful-penalty", type=float, default=0.05,
+                        help="penalty for harmful cross-agent sharing")
     parser.add_argument("--anchor-coeff", type=float, default=0.005,
                         help="SFT anchor coefficient to prevent covariate drift")
     parser.add_argument("--max-len", type=int, default=4096,
                         help="maximum sequence length for controller training")
+    parser.add_argument("--advantage-mode", choices=("task_grpo", "hybrid", "credit"),
+                        default="hybrid",
+                        help="GRPO advantage formulation: hybrid (task advantage + collaboration credit), "
+                             "task_grpo (true group-normalized task score), or credit (per-decision credit shaping)")
     args = parser.parse_args()
     mode = {"sft": "linear_sft", "rl": "linear_rl"}.get(args.mode, args.mode)
     if mode in ("linear_sft", "qwen_sft"):
@@ -257,6 +271,13 @@ if __name__ == "__main__":
         qwen_lora.train_qwen_rl(
             trace_paths, args.out, args.base_model, rewards=rewards,
             epochs=epochs, init_checkpoint=args.init, max_len=args.max_len,
+            advantage_mode=args.advantage_mode,
+            beta=args.beta,
+            lambda_=args.lambda_cost,
+            target_bonus=args.target_bonus,
+            target_card_budget=args.target_card_budget,
+            gamma_density=args.gamma_density,
+            harmful_penalty=args.harmful_penalty,
         )
     elif mode == "linear_rl":
         from marble.controllers.rl_controller import train_rl

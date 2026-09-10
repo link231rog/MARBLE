@@ -130,8 +130,10 @@ def collect_rollouts(
 
     traces: List[str] = []
     rewards: List[float] = []
-    manifest: List[Dict[str, Any]] = []
+    rollout_manifest: List[Dict[str, Any]] = []
     for task in tasks:
+        task_traces: List[str] = []
+        task_rewards: List[float] = []
         for rollout_id in range(rollouts_per_task):
             episode_root = out_root / f"rollout-{rollout_id:03d}"
             summary = run_task(
@@ -183,11 +185,19 @@ def collect_rollouts(
                 "trace": str(trace_path.resolve()),
                 "summary": str(summary_path.resolve()),
             }
-            manifest.append(record)
+            rollout_manifest.append(record)
             if trace_path.exists():
-                traces.append(str(trace_path.resolve()))
-                rewards.append(score)
-    return traces, rewards, manifest
+                task_traces.append(str(trace_path.resolve()))
+                task_rewards.append(score)
+
+        if len(task_traces) < rollouts_per_task:
+            raise RuntimeError(
+                f"Task {task.task_id} on {task.benchmark} produced only {len(task_traces)} successful rollouts "
+                f"(expected {rollouts_per_task}). Incomplete groups violate GRPO group advantage calculation."
+            )
+        traces.extend(task_traces)
+        rewards.extend(task_rewards)
+    return traces, rewards, rollout_manifest
 
 
 def train_fresh_rollouts(
@@ -212,6 +222,7 @@ def train_fresh_rollouts(
     _lambda: Optional[float] = None,
     beta: Optional[float] = None,
     seed: int = 42,
+    advantage_mode: str = "task_grpo",
 ) -> Dict[str, Any]:
     """Run repeated fresh-rollout -> trajectory GRPO updates from an SFT adapter."""
     if rounds < 1:
@@ -258,6 +269,7 @@ def train_fresh_rollouts(
         "rounds": rounds,
         "seed": seed,
         "manifest": str(Path(manifest).resolve()) if manifest else None,
+        "advantage_mode": advantage_mode,
         "final_checkpoint": current_checkpoint,
         "rounds_detail": round_records,
         "status": "running",
@@ -303,7 +315,7 @@ def train_fresh_rollouts(
                 round=round_id,
                 input_checkpoint=current_checkpoint,
             )
-            traces, rewards, manifest = collect_rollouts(
+            traces, rewards, round_rollouts = collect_rollouts(
                 tasks,
                 current_checkpoint,
                 round_root,
@@ -324,7 +336,7 @@ def train_fresh_rollouts(
             )
             _atomic_write_json(
                 round_manifest_path,
-                {"round": round_id, "rollouts": manifest},
+                {"round": round_id, "rollouts": round_rollouts},
             )
             if len(traces) < 2:
                 raise ValueError("fresh rollout produced fewer than two trace files")
@@ -338,6 +350,7 @@ def train_fresh_rollouts(
                 sft_reference_checkpoint=str(Path(checkpoint).resolve()),
                 group_size=rollouts_per_task,
                 seed=seed,
+                advantage_mode=advantage_mode,
             )
             if not _checkpoint_complete(next_checkpoint):
                 raise RuntimeError(
@@ -424,6 +437,12 @@ def main(argv: Optional[List[str]] = None) -> None:
                         help="lambda value for reward")
     parser.add_argument("--beta", type=float, default=None, help="beta value for reward")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--advantage-mode",
+        default="task_grpo",
+        choices=["task_grpo", "hybrid", "credit"],
+        help="RL advantage calculation mode (default: task_grpo)",
+    )
     args = parser.parse_args(argv)
     task_ids = [int(value) for value in args.task_ids.split(",") if value.strip()]
     train_fresh_rollouts(
@@ -447,6 +466,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         _lambda=args._lambda,
         beta=args.beta,
         seed=args.seed,
+        advantage_mode=args.advantage_mode,
     )
 
 

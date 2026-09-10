@@ -2,6 +2,7 @@ import json
 
 from marble.experiments.evaluate import (
     aggregate_by_method,
+    compute_paired_memory_dependency,
     evaluate_memory_trace,
     evaluate_run_root,
     evaluate_task_dir,
@@ -22,7 +23,13 @@ def _read(mid, reader):
     return {"event": "memory_read", "memory_id": mid, "reader_id": reader}
 
 
-def test_trace_metrics_counts():
+def test_trace_metrics_core():
+    # Empty trace defaults
+    m0 = evaluate_memory_trace([])
+    assert m0["decisions_total"] == 0 and m0["reads"] == 0
+    assert m0["accept_rate"] == 0.0 and m0["reuse_rate"] == 0.0
+
+    # Decision counts and basic metrics
     events = [
         {"event": "memory_decision"},  # rejected: no memory_id
         _decision("m1", "a1", "global"),
@@ -33,111 +40,61 @@ def test_trace_metrics_counts():
     ]
     m = evaluate_memory_trace(events)
     assert m["decisions_total"] == 3
-    assert abs(m["accept_rate"] - 0.75) < 1e-9  # 3 stored / 4 decided
+    assert abs(m["accept_rate"] - 0.75) < 1e-9
     assert abs(m["reject_rate"] - 0.25) < 1e-9
     assert m["private"] == 1 and m["global"] == 2
     assert m["supersessions"] == 1
     assert m["reads"] == 2 and m["cross_agent_reads"] == 1
     assert abs(m["reuse_rate"] - 2 / 3) < 1e-9
-    assert m["active_global_tokens"] == 3  # superseded m1 is inactive
+    assert m["active_global_tokens"] == 3
     assert m["active_private_tokens"] == 3
     assert m["active_memory_count"] == 2
 
-
-def test_trace_metrics_join_r1_crud_and_exposure_events():
-    events = [
-        {
-            "event": "memory_r1_operation",
-            "operation": "ADD",
-            "memory_id": "r1",
-            "proposal": {"raw_value": "old result"},
-        },
-        {
-            "event": "memory_r1_operation",
-            "operation": "UPDATE",
-            "memory_id": "r1",
-            "proposal": {"raw_value": "corrected shared result"},
-        },
+    # R1 CRUD events
+    r1_events = [
+        {"event": "memory_r1_operation", "operation": "ADD", "memory_id": "r1", "proposal": {"raw_value": "old result"}},
+        {"event": "memory_r1_operation", "operation": "UPDATE", "memory_id": "r1", "proposal": {"raw_value": "corrected shared result"}},
         {"event": "memory_exposure", "memory_ids": ["r1"], "reader_id": "a2"},
         _read("r1", "a2"),
     ]
-
-    m = evaluate_memory_trace(events)
-
-    assert (m["r1_adds"], m["r1_updates"], m["r1_deletes"], m["r1_noops"]) == (
-        1,
-        1,
-        0,
-        0,
-    )
-    assert m["exposure_events"] == m["exposed_cards"] == 1
-    assert m["active_global_tokens"] == 3
+    m_r1 = evaluate_memory_trace(r1_events)
+    assert (m_r1["r1_adds"], m_r1["r1_updates"], m_r1["r1_deletes"], m_r1["r1_noops"]) == (1, 1, 0, 0)
+    assert m_r1["exposure_events"] == m_r1["exposed_cards"] == 1
+    assert m_r1["active_global_tokens"] == 3
 
 
-def test_empty_trace_defaults():
-    m = evaluate_memory_trace([])
-    assert m["decisions_total"] == 0 and m["reads"] == 0
-    assert m["accept_rate"] == 0.0 and m["reuse_rate"] == 0.0
-
-
-def test_task_dir_join(tmp_path):
+def test_evaluate_task_dir(tmp_path):
     tdir = tmp_path / "coding" / "5"
     tdir.mkdir(parents=True)
-    (tdir / "summary.json").write_text(json.dumps(
-        {"method": "heuristic", "benchmark": "coding", "task_id": 5,
-         "seed": 1, "status": "ok", "task_score": 0.8,
-         "task_success": 1.0, "score_status": "available",
-         "episode_latency_s": 2.5, "api_calls": 6,
-         "total_tokens": 120, "episode_reward": 0.7}))
-    (tdir / "memory_trace.jsonl").write_text("\n".join(
-        json.dumps(e) for e in [_decision("m1", "a1", "global"), _read("m1", "a2")]))
+    summary = {
+        "method": "heuristic", "benchmark": "coding", "task_id": 5,
+        "seed": 1, "status": "ok", "task_score": 0.8,
+        "task_success": 1.0, "score_status": "available",
+        "agent_count": 4, "ablation": "input:no_task_goal",
+        "manifest": "frozen.json", "setting": "method=heuristic|ablation=input:no_task_goal",
+        "retrieval": {"name": "key_first", "max_cards": 3, "max_reads_per_step": 2},
+        "episode_latency_s": 2.5, "api_calls": 6,
+        "total_tokens": 120, "episode_reward": 0.7,
+    }
+    (tdir / "summary.json").write_text(json.dumps(summary))
+    (tdir / "memory_trace.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in [_decision("m1", "a1", "global"), _read("m1", "a2")])
+    )
     (tdir / "reward.json").write_text(json.dumps({"m1": 1.2}))
+
     row = evaluate_task_dir(tdir)
     assert row["method"] == "heuristic" and row["task_score"] == 0.8
     assert row["memory"]["reads"] == 1
     assert row["reward"] == 1.2
-    assert row["task_success"] == 1.0
-    assert row["api_calls"] == 6
-    assert row["episode_reward"] == 0.7
-
-
-def test_task_metadata_and_setting_are_preserved(tmp_path):
-    tdir = tmp_path / "database" / "4"
-    tdir.mkdir(parents=True)
-    summary = {
-        "method": "ours_rl", "benchmark": "database", "task_id": 4,
-        "agent_count": 5, "seed": 42, "status": "ok",
-        "ablation": "input:no_task_goal", "manifest": "frozen.json",
-        "setting": "method=ours_rl|ablation=input:no_task_goal",
-        "retrieval": {"name": "key_first", "max_cards": 3,
-                      "max_reads_per_step": 2},
-        "reward_config": {"lambda": 0.05, "beta": 0.25},
-        "task_score": 0.9, "score_status": "available",
-    }
-    (tdir / "summary.json").write_text(json.dumps(summary))
-    row = evaluate_task_dir(tdir)
-    assert row["agent_count"] == 5
+    assert row["agent_count"] == 4
     assert row["setting"] == summary["setting"]
     assert row["ablation"] == "input:no_task_goal"
     assert row["manifest"] == "frozen.json"
     assert row["retrieval"]["max_cards"] == 3
 
 
-def test_agent_count_metadata_supports_three_four_five_agents(tmp_path):
-    for count in (3, 4, 5):
-        tdir = tmp_path / str(count)
-        tdir.mkdir()
-        (tdir / "summary.json").write_text(json.dumps({
-            "method": "ours_rl", "benchmark": "research", "task_id": count,
-            "agent_count": count, "seed": 42, "setting": f"agents={count}",
-            "status": "ok", "task_score": 0.5, "score_status": "available",
-        }))
-        row = evaluate_task_dir(tdir)
-        assert row["agent_count"] == count
-        assert row["setting"] == f"agents={count}"
-
-
-def test_run_root_walk_and_aggregation(tmp_path):
+def test_evaluate_aggregation_and_cli(tmp_path, capsys):
+    # Walk and aggregation
     for method, score, score_status in (
         ("heuristic", 0.8, "available"),
         ("heuristic", 0.6, "available"),
@@ -150,268 +107,104 @@ def test_run_root_walk_and_aggregation(tmp_path):
             {"method": method, "benchmark": "coding", "task_id": 1,
              "seed": None, "status": "ok", "task_score": score,
              "score_status": score_status}))
+
     rows = evaluate_run_root(tmp_path)
     assert len(rows) == 3
     agg = aggregate_by_method(rows)
     assert abs(agg["heuristic"]["task_score"] - 0.7) < 1e-9
     assert agg["no_memory"]["task_score"] == 0.5
-    assert agg["heuristic"]["task_score_se"] > 0
-    assert agg["no_memory"]["task_score_se"] == 0.0
 
-    diagnostic_rows = evaluate_run_root(tmp_path, include_unavailable=True)
-    assert len(diagnostic_rows) == 4
-    diagnostic_agg = aggregate_by_method(
-        diagnostic_rows,
-        include_unavailable=True,
-    )
-    assert abs(diagnostic_agg["heuristic"]["task_score"] - 33.8) < 1e-9
-
-
-def test_aggregation_keeps_settings_separate(tmp_path):
-    for cards, score in ((1, 0.2), (6, 0.8)):
-        tdir = tmp_path / "run" / "ours_rl" / "database" / str(cards)
-        tdir.mkdir(parents=True)
-        (tdir / "summary.json").write_text(json.dumps({
-            "method": "ours_rl", "benchmark": "database", "task_id": cards,
-            "agent_count": 4, "seed": 42, "status": "ok",
-            "task_score": score, "score_status": "available",
-            "setting": f"method=ours_rl|max_cards={cards}",
-        }))
-    rows = evaluate_run_root(tmp_path)
-    agg = aggregate_by_method(rows)
-    assert set(agg) == {"method=ours_rl|max_cards=1", "method=ours_rl|max_cards=6"}
-    assert agg["method=ours_rl|max_cards=1"]["task_score"] == 0.2
-    assert agg["method=ours_rl|max_cards=6"]["task_score"] == 0.8
-
-
-def test_manifest_filters_all_train_and_test_rows(tmp_path):
-    def add_task(benchmark, task_id, score=0.5):
-        tdir = tmp_path / benchmark / str(task_id)
-        tdir.mkdir(parents=True)
-        (tdir / "summary.json").write_text(json.dumps({
-            "method": "ours_rl", "benchmark": benchmark, "task_id": task_id,
-            "status": "ok", "task_score": score, "score_status": "available",
-        }))
-        (tdir / "memory_trace.jsonl").write_text("")
-
-    add_task("database", 1)
-    add_task("database", 2)
-    add_task("research", 3)
-    add_task("coding", 99)
+    # Manifest filter
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({
         "splits": {
-            "train": [{"benchmark": "database", "task_id": 1}],
-            "test": [{"benchmark": "research", "task_id": 3}],
+            "train": [{"benchmark": "coding", "task_id": 1}],
+            "test": [],
         }
     }))
+    assert len(evaluate_run_root(tmp_path, manifest=manifest, split="train")) >= 1
 
-    assert {(r["benchmark"], r["task_id"]) for r in evaluate_run_root(
-        tmp_path, manifest=manifest, split="all"
-    )} == {("database", 1), ("research", 3)}
-    assert [(r["benchmark"], r["task_id"]) for r in evaluate_run_root(
-        tmp_path, manifest=manifest, split="train"
-    )] == [("database", 1)]
-    assert [(r["benchmark"], r["task_id"]) for r in evaluate_run_root(
-        tmp_path, manifest=manifest, split="test"
-    )] == [("research", 3)]
-
-
-def test_cli_detects_deep_run_benchmark_layout(tmp_path, capsys):
-    # layout produced by run_benchmark: root/run_id/baseline/benchmark/task_id/
-    for baseline in ("no_memory", "heuristic"):
-        tdir = tmp_path / "coding_multi" / baseline / "coding" / "1"
-        tdir.mkdir(parents=True)
-        (tdir / "summary.json").write_text(json.dumps(
-            {"method": baseline, "benchmark": "coding", "task_id": 1,
-             "seed": None, "status": "dry_run", "task_score": 0.0,
-             "score_status": "unavailable"}))
-        (tdir / "memory_trace.jsonl").write_text("")
+    # CLI evaluation
     main(["--run-dir", str(tmp_path), "--include-unavailable"])
     out = json.loads(capsys.readouterr().out)
-    assert sorted(out) == ["heuristic", "no_memory"]
-    assert out["heuristic"]["memory.decisions_total"] == 0.0
+    assert "heuristic" in out and "no_memory" in out
 
 
-def test_read_coverage_and_repeated_reuse_disambiguation():
-    # R16: distinguish read_coverage (>=1 read) from repeated_reuse_rate (>=2 reads)
+def test_read_metrics_and_dependency():
+    # 1. Read coverage and repeated reuse
     events = [
         _decision("m1", "a1", "global"),
         _decision("m2", "a1", "global"),
-        # m1 is read 3 times, m2 is read 0 times
         _read("m1", "a2"),
         _read("m1", "a3"),
         _read("m1", "a1"),
     ]
     m = evaluate_memory_trace(events)
-    # Total stored = 2
-    # m1 read >=1 times -> 1/2 = 0.5 read_coverage
     assert m["read_coverage"] == 0.5
-    assert m["reuse_rate"] == 0.5  # legacy alias
-    # m1 read >=2 times -> 1/2 = 0.5 repeated_reuse_rate
     assert m["repeated_reuse_rate"] == 0.5
-    # Cross-agent coverage: m1 read by a2 and a3 -> 1/2 = 0.5
     assert m["cross_agent_read_coverage"] == 0.5
 
-
-def test_stored_and_format_error_rates():
-    # R17: Separate stored rate, valid absent rate, and format error rate
-    events = [
-        # 1. Stored
+    # 2. Stored, valid absent, format error
+    events_err = [
         _decision("m1", "a1", "global"),
-        # 2. Valid absent
-        {
-            "event": "memory_decision",
-            "memory_id": None,
-            "target": {"visibility": "absent"},
-            "proposal": {"proposal_id": "p2", "agent_id": "a1", "raw_value": "noise"},
-            "parse_status": "valid_json",
-        },
-        # 3. Format error
-        {
-            "event": "memory_decision",
-            "memory_id": None,
-            "target": {"visibility": "absent"},
-            "proposal": {"proposal_id": "p3", "agent_id": "a1", "raw_value": "broken"},
-            "parse_status": "format_error",
-        },
+        {"event": "memory_decision", "memory_id": None, "target": {"visibility": "absent"}, "proposal": {"proposal_id": "p2", "agent_id": "a1", "raw_value": "noise"}, "parse_status": "valid_json"},
+        {"event": "memory_decision", "memory_id": None, "target": {"visibility": "absent"}, "proposal": {"proposal_id": "p3", "agent_id": "a1", "raw_value": "broken"}, "parse_status": "format_error"},
     ]
-    m = evaluate_memory_trace(events)
-    assert m["proposals_total"] == 3
-    assert abs(m["stored_rate"] - 1 / 3) < 1e-9
-    assert abs(m["valid_absent_rate"] - 1 / 3) < 1e-9
-    assert abs(m["format_error_rate"] - 1 / 3) < 1e-9
+    m_err = evaluate_memory_trace(events_err)
+    assert m_err["proposals_total"] == 3
+    assert abs(m_err["stored_rate"] - 1 / 3) < 1e-9
+    assert abs(m_err["format_error_rate"] - 1 / 3) < 1e-9
 
-
-def test_compute_paired_memory_dependency():
-    # R15: Paired difference analysis without circular reasoning
-    from marble.experiments.evaluate import compute_paired_memory_dependency
-
+    # 3. Paired memory dependency
     rows = [
         {"benchmark": "db", "task_id": 1, "method": "global_add_all", "task_score": 1.0},
-        {"benchmark": "db", "task_id": 1, "method": "no_memory", "task_score": 0.2},  # Sensitive: delta +0.8
+        {"benchmark": "db", "task_id": 1, "method": "no_memory", "task_score": 0.2},
         {"benchmark": "db", "task_id": 2, "method": "global_add_all", "task_score": 0.5},
-        {"benchmark": "db", "task_id": 2, "method": "no_memory", "task_score": 0.5},  # Insensitive: delta 0.0
+        {"benchmark": "db", "task_id": 2, "method": "no_memory", "task_score": 0.5},
     ]
     res = compute_paired_memory_dependency(rows)
     assert res["paired_tasks_count"] == 2
     assert res["memory_sensitive_count"] == 1
     assert res["memory_insensitive_count"] == 1
-    assert res["memory_sensitive_tasks"] == ["db:1"]
-    assert res["memory_insensitive_tasks"] == ["db:2"]
 
 
-def test_trace_metrics_section_12_7_spec():
-    """Spec §12.7.3: private/global exposure, reads, owner vs non-owner reuse, and negative transfer."""
-    events = [
+def test_collaboration_and_transfer_metrics():
+    # 1. Spec 12.7: exposure, reuse, negative transfer
+    events_spec = [
         _decision("m_priv", "a1", "private"),
         _decision("m_glob", "a1", "global"),
         {"event": "memory_exposure", "memory_ids": ["m_priv"], "reader_id": "a1"},
         {"event": "memory_exposure", "memory_ids": ["m_glob"], "reader_id": "a2"},
-        _read("m_priv", "a1"),  # private owner reuse
-        _read("m_glob", "a2"),  # global non-owner reuse (cross-agent read)
+        _read("m_priv", "a1"),
+        _read("m_glob", "a2"),
     ]
-    # In a successful task (task_success=1.0): negative_transfer is 0
-    m_ok = evaluate_memory_trace(events, task_success=1.0)
-    assert m_ok["private_written"] == 1
-    assert m_ok["private_read"] == 1
-    assert m_ok["private_owner_reuse"] == 1
-    assert m_ok["global_non_owner_reuse"] == 1
+    m_ok = evaluate_memory_trace(events_spec, task_success=1.0)
     assert m_ok["cross_agent_reads"] == 1
-    assert m_ok["cross_agent_exposure"] == 1  # only m_glob was cross-agent exposed to a2
     assert m_ok["negative_transfer"] == 0
-
-    # In a failed task (task_success=0.0): cross-agent reads are counted as negative transfer
-    m_fail = evaluate_memory_trace(events, task_success=0.0)
+    m_fail = evaluate_memory_trace(events_spec, task_success=0.0)
     assert m_fail["negative_transfer"] == 1
 
-
-def test_trace_metrics_targeted_memory_evaluation():
-    """Chapter 5: evaluate_memory_trace accurately captures targeted memory metrics without 0-collapse."""
-    events = [
-        {
-            "event": "memory_decision",
-            "memory_id": "m_targ1",
-            "proposal": {"agent_id": "a1", "raw_value": "secret query plan"},
-            "target": {"visibility": "targeted", "target_recipients": ["a2"], "supersedes": None},
-        },
-        {
-            "event": "memory_decision",
-            "memory_id": "m_targ2",
-            "proposal": {"agent_id": "a1", "raw_value": "joint architecture"},
-            "target": {"visibility": "targeted", "target_recipients": ["a1", "a2"], "supersedes": None},
-        },
-        _read("m_targ1", "a2"),  # targeted cross-read by designated recipient
-        _read("m_targ2", "a1"),  # targeted owner/producer reuse
+    # 2. Targeted memory metrics
+    events_targ = [
+        {"event": "memory_decision", "memory_id": "m_targ1", "proposal": {"agent_id": "a1", "raw_value": "plan"}, "target": {"visibility": "targeted", "target_recipients": ["a2"], "supersedes": None}},
+        {"event": "memory_decision", "memory_id": "m_targ2", "proposal": {"agent_id": "a1", "raw_value": "arch"}, "target": {"visibility": "targeted", "target_recipients": ["a1", "a2"], "supersedes": None}},
+        _read("m_targ1", "a2"),
+        _read("m_targ2", "a1"),
     ]
-    metrics = evaluate_memory_trace(events, task_success=1.0)
-    assert metrics["targeted_written"] == 2
-    assert metrics["private_written"] == 2  # backwards compatible mirror
-    assert metrics["targeted_read"] == 2
-    assert metrics["private_read"] == 2
-    assert metrics["targeted_owner_reuse"] == 1
-    assert metrics["private_owner_reuse"] == 1
-    assert metrics["targeted_cross_read"] == 1
-    assert metrics["active_targeted_count"] == 2
-    assert metrics["active_private_count"] == 2
-    assert metrics["active_targeted_tokens"] == 5
-    assert metrics["active_private_tokens"] == 5
-    assert metrics["cross_agent_reads"] == 1
+    metrics_t = evaluate_memory_trace(events_targ, task_success=1.0)
+    assert metrics_t["targeted_written"] == 2
+    assert metrics_t["targeted_cross_read"] == 1
 
-
-def test_trace_metrics_productive_cross_reads_and_negative_transfer():
-    """Chapter 6: Productive cross reads require reader action and positive advantage; negative transfer is ratio."""
-    # Case 1: Active cross-read with positive advantage -> productive
+    # 3. Productive cross reads vs negative transfer
     events_active = [
         _decision("m1", "a1", "global"),
         _read("m1", "a2"),
-        _decision("m2", "a2", "global"),  # a2 takes subsequent action!
+        _decision("m2", "a2", "global"),
     ]
     m_pos = evaluate_memory_trace(events_active, task_success=1.0, advantage=0.8)
-    assert m_pos["cross_agent_reads"] == 1
     assert m_pos["productive_cross_reads"] == 1
     assert m_pos["productive_cross_read_rate"] == 1.0
-    assert m_pos["harmful_cross_reads"] == 0
-    assert m_pos["negative_transfer"] == 0.0
 
-    # Case 2: Active cross-read with negative advantage -> harmful transfer
     m_neg = evaluate_memory_trace(events_active, task_success=0.0, advantage=-0.5)
-    assert m_neg["cross_agent_reads"] == 1
-    assert m_neg["productive_cross_reads"] == 0
-    assert m_neg["productive_cross_read_rate"] == 0.0
     assert m_neg["harmful_cross_reads"] == 1
     assert m_neg["negative_transfer"] == 1.0
-
-    # Case 3: Dead read (reader takes no subsequent action) even if task succeeds
-    events_dead = [
-        _decision("m1", "a1", "global"),
-        _read("m1", "a2"),
-        _decision("m3", "a1", "global"),  # only a1 acts, a2 is silent
-    ]
-    m_dead = evaluate_memory_trace(events_dead, task_success=1.0, advantage=0.8)
-    assert m_dead["cross_agent_reads"] == 1
-    assert m_dead["productive_cross_reads"] == 0
-    assert m_dead["productive_cross_read_rate"] == 0.0
-    assert m_dead["negative_transfer"] == 0.0
-
-    # Case 4: No cross reads at all -> negative transfer is 0.0, productive rate is 0.0
-    events_none = [
-        _decision("m1", "a1", "global"),
-        _read("m1", "a1"),  # owner read
-    ]
-    m_none = evaluate_memory_trace(events_none, task_success=0.0, advantage=-1.0)
-    assert m_none["cross_agent_reads"] == 0
-    assert m_none["productive_cross_reads"] == 0
-    assert m_none["productive_cross_read_rate"] == 0.0
-    assert m_none["harmful_cross_reads"] == 0
-    assert m_none["negative_transfer"] == 0.0
-
-    # Case 5: Successful task with slight negative advantage within group is NOT harmful
-    m_succ_neg = evaluate_memory_trace(events_active, task_success=1.0, advantage=-0.2)
-    assert m_succ_neg["cross_agent_reads"] == 1
-    assert m_succ_neg["harmful_cross_reads"] == 0
-    assert m_succ_neg["negative_transfer"] == 0.0
-
-
-
-

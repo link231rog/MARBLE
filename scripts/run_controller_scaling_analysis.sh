@@ -135,7 +135,7 @@ for i in \$(seq 1 10); do
     fi
     sleep 1
 done
-tmux new-session -d -s qwen_server "MARBLE_MODEL_PATH=$M_DIR MARBLE_SERVED_MODEL_NAME=$M_NAME MARBLE_SCALE=$SCALE PORT=8000 python3 /data/home/huangzixuan/MARBLE/scripts/serve_qwen_openai.py >> /data/home/huangzixuan/vllm_serve.log 2>&1"
+tmux new-session -d -s qwen_server "MARBLE_MODEL_PATH=$M_DIR MARBLE_SERVED_MODEL_NAME=$M_NAME MARBLE_SCALE=$SCALE PORT=8000 /data/home/huangzixuan/miniconda3/envs/sigir/bin/python /data/home/huangzixuan/workspace/MARBLE/scripts/serve_qwen_openai.py >> /data/home/huangzixuan/vllm_serve.log 2>&1"
 REMOTE_SWITCH
     echo "Waiting for endpoint http://127.0.0.1:18000/v1/models to verify $M_NAME..."
     for i in $(seq 1 45); do
@@ -196,16 +196,17 @@ train_scale_sft() {
     echo "===================================================================="
     echo "⚡ [GPU1] Training SFT Adapter for Controller Scale: $SCALE"
     echo "===================================================================="
+REMOTE_PYTHON="/data/home/huangzixuan/miniconda3/envs/sigir/bin/python"
     ssh "$REMOTE_HOST" "bash -s" << REMOTE_SFT
 set -euo pipefail
 cd $REMOTE_REPO
 mkdir -p "$SFT_OUT"
 DIRS=()
-for d in runs/train_hard_traces runs/train_rollout_ours_base runs/rl_smoke_check; do
+for d in runs/train_hard_traces runs/train_rollout_ours_base runs/rl_smoke_check runs/grpo_recovery_smoke_20260909; do
     [ -d "\$d" ] && DIRS+=("\$d")
 done
 TRACES=(\$(find "\${DIRS[@]}" -name "memory_trace.jsonl" | head -n 250))
-python3 -m marble.experiments.train_controller \
+$REMOTE_PYTHON -m marble.experiments.train_controller \
     --mode qwen_sft \
     --traces "\${TRACES[@]}" \
     --base-model "$M_DIR" \
@@ -239,6 +240,7 @@ train_scale_grpo() {
     echo "===================================================================="
     echo "🎯 [GPU1] Training 1-Step GRPO Adapter for Controller Scale: $SCALE"
     echo "===================================================================="
+    REMOTE_PYTHON="/data/home/huangzixuan/miniconda3/envs/sigir/bin/python"
     ssh "$REMOTE_HOST" "bash -s" << REMOTE_GRPO
 set -euo pipefail
 cd $REMOTE_REPO
@@ -246,21 +248,27 @@ mkdir -p "$RL_OUT"
 
 TRACES=()
 REWARDS=()
+SOURCE_DIR="runs/grpo_recovery_smoke_20260909"
+if [ ! -d "\$SOURCE_DIR" ]; then
+    SOURCE_DIR="runs/rl_smoke_check"
+fi
 while IFS= read -r summary_file; do
     trace_file="\${summary_file%summary.json}memory_trace.jsonl"
     if [ -f "\$trace_file" ]; then
         TRACES+=("\$trace_file")
         REWARDS+=("\$summary_file")
     fi
-done < <(find runs/rl_smoke_check -name "summary.json")
+done < <(find "\$SOURCE_DIR" -name "summary.json")
 
-python3 -m marble.experiments.train_controller \
+export MARBLE_RL_CHUNK_SIZE=1
+$REMOTE_PYTHON -m marble.experiments.train_controller \
     --mode qwen_rl \
     --traces "\${TRACES[@]}" \
     --rewards "\${REWARDS[@]}" \
     --init "$SFT_IN" \
     --base-model "$M_DIR" \
     --epochs 1 \
+    --advantage-mode task_grpo \
     --out "$RL_OUT"
 REMOTE_GRPO
     mkdir -p "$RL_OUT"

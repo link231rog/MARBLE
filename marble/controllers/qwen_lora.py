@@ -397,8 +397,27 @@ def sequence_log_probs(logits: Any, labels: Any) -> Any:
 def load_qwen_rl_samples(
     trace_paths: Sequence[str],
     rewards: Sequence[float],
+    advantage_mode: str = "task_grpo",
+    beta: float | None = None,
+    lambda_: float | None = None,
+    target_bonus: float | None = None,
+    target_card_budget: int | None = None,
+    gamma_density: float | None = None,
+    harmful_penalty: float | None = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """Read replayable stored-memory decisions with formal per-memory credit."""
+    """Read replayable memory decisions with verified GRPO group advantage or shaped credit.
+
+    advantage_mode options:
+      - 'task_grpo' (default, strict Chapter 4 §5.1):
+          A_e = (S_e - mean(S_group)) / (std(S_group) + eps)
+          Assigned to all decisions in trajectory e. Correctly rewards valid absent
+          decisions in winning trajectories and penalizes unhelpful actions in failing ones.
+      - 'hybrid':
+          A_e,d = task_advantage + credit
+          Blends group task advantage baseline with collaboration credit shaping bonus.
+      - 'credit':
+          A_e,d = credit (legacy proposal credit)
+    """
     if len(trace_paths) != len(rewards):
         raise ValueError("--rewards must provide one task_score per trace")
 
@@ -425,10 +444,19 @@ def load_qwen_rl_samples(
         ]
         if not decisions:
             continue
-        task_id = str(decisions[0].get("proposal", {}).get("task_id", ""))
+        task_id = str(
+            summary.get("task_id")
+            or metadata.get("task_id")
+            or (decisions[0].get("proposal", {}) or {}).get("task_id")
+            or decisions[0].get("task_id", "")
+        )
         if not task_id:
             raise ValueError(f"trace {trace_path} has no decision task_id")
-        benchmark = str(summary.get("benchmark", metadata.get("benchmark", "")))
+        benchmark = str(
+            summary.get("benchmark")
+            or metadata.get("benchmark")
+            or decisions[0].get("benchmark", "")
+        )
         score = float(reward)
         task_key = (benchmark, task_id)
         episodes.append((events, score, task_key, summary))
@@ -473,10 +501,12 @@ def load_qwen_rl_samples(
             advantage=norm_advantage,
             same_task_baseline=mean_s,
             task_success=task_success,
-            target_bonus=0.35,
-            gamma_density=0.15,
-            target_card_budget=8,
-            harmful_penalty=0.25,
+            beta=0.25 if beta is None else beta,
+            lambda_=0.05 if lambda_ is None else lambda_,
+            target_bonus=0.35 if target_bonus is None else target_bonus,
+            gamma_density=0.15 if gamma_density is None else gamma_density,
+            target_card_budget=8 if target_card_budget is None else target_card_budget,
+            harmful_penalty=0.25 if harmful_penalty is None else harmful_penalty,
         )
         for event in events:
             if event.get("event") != "memory_decision":
@@ -502,11 +532,21 @@ def load_qwen_rl_samples(
                 stats["skipped_no_prompt"] += 1
                 continue
             old_lp = event.get("old_log_prob") if "old_log_prob" in event else event.get("controller_log_prob")
+
+            # Calculate effective advantage based on mode
+            if advantage_mode == "task_grpo":
+                eff_adv = float(norm_advantage)
+            elif advantage_mode == "hybrid":
+                eff_adv = float(norm_advantage) + float(credit)
+            else:  # credit
+                eff_adv = float(credit)
+
             sample_entry: Dict[str, Any] = {
                 "prompt": prompt,
                 "completion": completion,
-                "advantage": float(credit),
+                "advantage": eff_adv,
                 "task_advantage": float(norm_advantage),
+                "credit": float(credit),
                 "benchmark": task_key[0],
                 "task_id": task_key[1],
             }
@@ -646,6 +686,13 @@ def train_qwen_rl(
     kl_coeff: float = 0.05,
     clip_eps: float = 0.2,
     group_size: int = 4,
+    advantage_mode: str = "hybrid",
+    beta: float = 0.75,
+    lambda_: float = 0.005,
+    target_bonus: float = 0.50,
+    target_card_budget: int = 20,
+    gamma_density: float = 0.02,
+    harmful_penalty: float = 0.05,
 ) -> str:
     """Trajectory-level GRPO over Qwen LoRA adapter (spec Chapter 4 §4-§6).
 
@@ -654,7 +701,17 @@ def train_qwen_rl(
     - Relative KL penalty vs frozen SFT reference policy: D_KL(pi_theta || pi_SFT)
     - epochs=1 on fresh rollouts without multi-epoch replay drift.
     """
-    samples, stats = load_qwen_rl_samples(trace_paths, rewards)
+    samples, stats = load_qwen_rl_samples(
+        trace_paths,
+        rewards,
+        advantage_mode=advantage_mode,
+        beta=beta,
+        lambda_=lambda_,
+        target_bonus=target_bonus,
+        target_card_budget=target_card_budget,
+        gamma_density=gamma_density,
+        harmful_penalty=harmful_penalty,
+    )
     if not samples:
         raise ValueError(
             "Qwen RL found no replayable decisions "
@@ -715,22 +772,24 @@ def train_qwen_rl(
         item["task_id"] = sample.get("task_id", "")
         examples.append(item)
 
-    # 1. Compute old_log_prob under rollout policy (init_checkpoint) if not logged in trace
-    need_old_lp = any(ex.get("old_log_prob") is None for ex in examples)
-    if need_old_lp:
+    # 1. Ensure exact token-level alignment for old_log_prob under rollout policy.
+    # When init_checkpoint is provided, always evaluate log \pi_{old}(completion | prompt)
+    # directly over the exact masked label tokens to guarantee 100% token-by-token alignment
+    # with curr_log_prob (eliminating markdown fence / whitespace mismatches).
+    compute_aligned_old_lp = bool(init_checkpoint) or any(ex.get("old_log_prob") is None for ex in examples)
+    if compute_aligned_old_lp:
         model.eval()
         with torch.no_grad():
             for ex in examples:
-                if ex.get("old_log_prob") is None:
-                    in_ids = torch.tensor([ex["input_ids"]], dtype=torch.long, device=device)
-                    attn = torch.tensor([ex["attention_mask"]], dtype=torch.long, device=device)
-                    lbls = torch.tensor([ex["labels"]], dtype=torch.long, device=device)
-                    out = model(input_ids=in_ids, attention_mask=attn)
-                    if hasattr(out, "logits"):
-                        ex["old_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
-                    else:
-                        ex["old_log_prob"] = 0.0
-                    del in_ids, attn, lbls, out
+                in_ids = torch.tensor([ex["input_ids"]], dtype=torch.long, device=device)
+                attn = torch.tensor([ex["attention_mask"]], dtype=torch.long, device=device)
+                lbls = torch.tensor([ex["labels"]], dtype=torch.long, device=device)
+                out = model(input_ids=in_ids, attention_mask=attn)
+                if hasattr(out, "logits"):
+                    ex["old_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
+                else:
+                    ex["old_log_prob"] = 0.0
+                del in_ids, attn, lbls, out
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -739,7 +798,11 @@ def train_qwen_rl(
     has_distinct_ref = bool(
         ref_ckpt and init_checkpoint and str(Path(ref_ckpt).resolve()) != str(Path(init_checkpoint).resolve())
     )
-    if has_distinct_ref and hasattr(model, "load_adapter"):
+    if has_distinct_ref:
+        if not hasattr(model, "load_adapter"):
+            raise RuntimeError(
+                f"Model architecture does not support load_adapter for SFT reference checkpoint: {ref_ckpt}"
+            )
         try:
             model.load_adapter(ref_ckpt, adapter_name="sft_ref")
             model.set_adapter("sft_ref")
@@ -753,12 +816,18 @@ def train_qwen_rl(
                     if hasattr(out, "logits"):
                         ex["ref_log_prob"] = float(sequence_log_probs(out.logits, lbls).item())
                     else:
-                        ex["ref_log_prob"] = float(ex["old_log_prob"])
+                        raise RuntimeError(f"Reference policy forward pass returned no logits for checkpoint: {ref_ckpt}")
                     del in_ids, attn, lbls, out
             model.set_adapter("default")
-        except Exception:
-            for ex in examples:
-                ex["ref_log_prob"] = float(ex["old_log_prob"])
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "FATAL: Failed to load or evaluate SFT reference checkpoint '%s': %s", ref_ckpt, exc
+            )
+            raise RuntimeError(
+                f"Failed to load or evaluate SFT reference checkpoint '{ref_ckpt}': {exc}. "
+                "Aborting training to prevent unanchored KL drift."
+            ) from exc
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     else:
@@ -846,6 +915,13 @@ def train_qwen_rl(
     metadata = {
         "base_model": base_model,
         "training_method": "trajectory_grpo",
+        "advantage_mode": advantage_mode,
+        "beta": beta,
+        "lambda": lambda_,
+        "target_bonus": target_bonus,
+        "target_card_budget": target_card_budget,
+        "gamma_density": gamma_density,
+        "harmful_penalty": harmful_penalty,
         "group_batching": True,
         "groups": len(task_groups),
         "group_size": group_size,

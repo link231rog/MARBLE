@@ -1,0 +1,92 @@
+{
+  "name": "rl_train_12tasks_hard",
+  "description": "Master Hard Training Set: 12 genuinely hard tasks across Database, Research, and Coding.",
+  "splits": {
+    "train_hard": [
+      {
+        "benchmark": "database",
+        "task_id": 51,
+        "agent_count": 5,
+        "root_causes": [
+          "VACUUM",
+          "FETCH_LARGE_DATA"
+        ]
+      },
+      {
+        "benchmark": "database",
+        "task_id": 52,
+        "agent_count": 5,
+        "root_causes": [
+          "LOCK_CONTENTION",
+          "REDUNDANT_INDEX"
+        ]
+      },
+      {
+        "benchmark": "database",
+        "task_id": 53,
+        "agent_count": 5,
+        "root_causes": [
+          "LOCK_CONTENTION",
+          "REDUNDANT_INDEX"
+        ]
+      },
+      {
+        "benchmark": "database",
+        "task_id": 54,
+        "agent_count": 5,
+        "root_causes": [
+          "VACUUM",
+          "FETCH_LARGE_DATA"
+        ]
+      },
+      {
+        "benchmark": "research",
+        "task_id": 10,
+        "agent_count": 8,
+        "category": "cross_disciplinary_high_coordination"
+      },
+      {
+        "benchmark": "research",
+        "task_id": 11,
+        "agent_count": 22,
+        "category": "extreme_agent_count_coordination"
+      },
+      {
+        "benchmark": "research",
+        "task_id": 15,
+        "agent_count": 9,
+        "category": "cross_disciplinary_high_coordination"
+      },
+      {
+        "benchmark": "research",
+        "task_id": 29,
+        "agent_count": 8,
+        "category": "cross_disciplinary_high_coordination"
+      },
+      {
+        "benchmark": "coding",
+        "task_id": 29,
+        "agent_count": 3,
+        "category": "multi_agent_shooter_framework"
+      },
+      {
+        "benchmark": "coding",
+        "task_id": 27,
+        "agent_count": 3,
+        "category": "collaborative_build_optimizer"
+      },
+      {
+        "benchmark": "coding",
+        "task_id": 53,
+        "agent_count": 3,
+        "category": "multi_stage_dependency_game"
+      },
+      {
+        "benchmark": "coding",
+        "task_id": 47,
+        "agent_count": 3,
+        "category": "multi_stage_dependency_quest"
+      }
+    ]
+  }
+}

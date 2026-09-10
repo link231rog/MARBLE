@@ -1,5 +1,4 @@
 import pytest
-
 from marble.experiments.baselines import (
     MAIN_BASELINES,
     baseline_spec,
@@ -7,7 +6,8 @@ from marble.experiments.baselines import (
 )
 
 
-def test_main_baselines_match_frozen_experiment_matrix():
+def test_baselines_spec_and_resolution():
+    # Frozen experiment matrix
     assert MAIN_BASELINES == (
         "single_agent",
         "no_memory",
@@ -23,42 +23,23 @@ def test_main_baselines_match_frozen_experiment_matrix():
         "ours_rl",
     )
 
-
-
-@pytest.mark.parametrize(
-    ("legacy", "canonical"),
-    [
+    # Legacy names resolve to canonical methods
+    for legacy, canonical in [
         ("global_always", "global_add_all"),
         ("qwen_sft", "ours_sft"),
         ("qwen_rl", "ours_rl"),
         ("ours-private-to-global", "ours_private_to_global"),
-    ],
-)
-def test_legacy_names_resolve_to_canonical_methods(legacy, canonical):
-    assert canonical_baseline(legacy) == canonical
+    ]:
+        assert canonical_baseline(legacy) == canonical
 
+    # Baseline specs
+    assert baseline_spec("single_agent").uses_memory is False
+    assert baseline_spec("single_agent").single_agent is True
+    assert baseline_spec("memory_r1_style").requires_crud_manager is True
+    assert baseline_spec("memory_r1_style").controller == "memory_r1_crud"
 
-def test_single_agent_spec_has_no_memory_and_single_agent_execution():
-    spec = baseline_spec("single_agent")
-
-    assert spec.uses_memory is False
-    assert spec.single_agent is True
-
-
-def test_memory_r1_spec_is_explicitly_distinct_from_ours():
-    spec = baseline_spec("memory_r1_style")
-
-    assert spec.requires_crud_manager is True
-    assert spec.controller == "memory_r1_crud"
-
-
-def test_unknown_baseline_is_rejected():
     with pytest.raises(ValueError, match="unknown baseline"):
         canonical_baseline("not-a-method")
 
-
-def test_baselines_comm_governor_defaults_to_false():
     for name in ("ours_base", "ours_sft", "ours_rl", "single_agent", "no_memory", "global_add_all", "lts_style", "mem0_style"):
-        spec = baseline_spec(name)
-        assert spec.enable_comm_governor is False, f"{name} must have comm_gov disabled by default to isolate variables"
-
+        assert baseline_spec(name).enable_comm_governor is False

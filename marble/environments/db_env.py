@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -83,13 +84,35 @@ class DBEnvironment(BaseEnvironment):
         print(self.get_slow_query_handler())
 
     def start_docker_containers(self):
+        runtime_mode = os.getenv("MARBLE_DB_RUNTIME", "auto")
+        use_native = (runtime_mode == "native") or (shutil.which("docker") is None)
+        if use_native:
+            if self.check_db_connection():
+                print("Native database runtime is already active and reachable.")
+                return
+            worker_id = os.getenv("MARBLE_WORKER_ID", "0")
+            db_port = os.getenv("MARBLE_DB_PORT", "54320")
+            prom_port = os.getenv("MARBLE_PROM_PORT", "55000")
+            node_port = os.getenv("MARBLE_NODE_PORT", "56000")
+            pg_exp_port = os.getenv("MARBLE_PG_EXPORTER_PORT", "57000")
+            script_path = os.path.abspath(os.path.join(self.current_dir, "..", "..", "scripts", "native_db_ctl.sh"))
+            if os.path.exists(script_path):
+                print(f"Starting native DB stack via {script_path} (worker={worker_id})...")
+                subprocess.run(
+                    [script_path, "up", str(worker_id), str(db_port), str(prom_port), str(node_port), str(pg_exp_port)],
+                    check=True,
+                )
+            else:
+                print(f"Warning: native_db_ctl.sh not found at {script_path}")
+            return
+
         project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
         print(f"Starting Docker containers (project={project})...")
         subprocess.run(
             ["docker", "compose", "-p", project, "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             shell=False,
-            check=True,
+            check=False,
         )
         subprocess.run(
             ["docker", "compose", "-p", project, "up", "-d", "--remove-orphans"],
@@ -127,7 +150,7 @@ class DBEnvironment(BaseEnvironment):
         cursor.execute("RESET client_min_messages;")
         print("Warning messages turned on.")
 
-        cursor.execute("CREATE EXTENSION pg_stat_statements;")
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;")
 
         # interactive sql shell
         # while True:
@@ -654,11 +677,23 @@ class DBEnvironment(BaseEnvironment):
             return False
 
     def terminate(self) -> None:
+        runtime_mode = os.getenv("MARBLE_DB_RUNTIME", "auto")
+        use_native = (runtime_mode == "native") or (shutil.which("docker") is None)
+        if use_native:
+            if os.getenv("MARBLE_MANAGED_STACK") == "1":
+                # Stack lifecycle managed by outer script/trap
+                return
+            worker_id = os.getenv("MARBLE_WORKER_ID", "0")
+            script_path = os.path.abspath(os.path.join(self.current_dir, "..", "..", "scripts", "native_db_ctl.sh"))
+            if os.path.exists(script_path):
+                subprocess.run([script_path, "down", str(worker_id)], check=False)
+            return
+
         project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
         subprocess.run(
             ["docker", "compose", "-p", project, "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
-            check=True,
+            check=False,
         )
 
 

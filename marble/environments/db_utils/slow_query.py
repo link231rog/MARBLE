@@ -26,7 +26,7 @@ def obtain_slow_queries(
         cursor = connection.cursor(cursor_factory=RealDictCursor)
 
         slow_queries_query = f"""
-            CREATE EXTENSION pg_stat_statements;
+            CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
             SELECT
                 query,
                 total_exec_time

@@ -344,18 +344,26 @@ def test_load_qwen_rl_samples_uses_same_task_memory_credit(tmp_path):
     assert samples == [{
         "prompt": "first prompt",
         "completion": '{"visibility":"global","supersedes":null}',
-        "advantage": 1.25 - 0.05 / 4096,
+        "advantage": 1.0,
         "task_advantage": 1.0,
+        "credit": 1.25 - 0.05 / 4096,
         "benchmark": "",
         "task_id": "same",
     }, {
         "prompt": "second rollout",
         "completion": '{"visibility":"global","supersedes":null}',
-        "advantage": -0.05 / 4096,
+        "advantage": -1.0,
         "task_advantage": -1.0,
+        "credit": -0.05 / 4096,
         "benchmark": "",
         "task_id": "same",
     }]
+    # Test backward-compatible credit mode
+    samples_credit, _ = load_qwen_rl_samples(
+        [str(trace), str(second_trace)], [2.0, 0.0], advantage_mode="credit"
+    )
+    assert samples_credit[0]["advantage"] == 1.25 - 0.05 / 4096
+    assert samples_credit[1]["advantage"] == -0.05 / 4096
     assert stats["decisions"] == 3
     assert stats["skipped_no_credit"] == 1
 
@@ -397,9 +405,15 @@ def test_load_qwen_rl_samples_keeps_same_task_id_per_benchmark(tmp_path):
 
     samples, _ = load_qwen_rl_samples(traces, rewards)
 
-    assert samples[0]["advantage"] == 1.25 - 0.05 / 4096
-    # Chapter 4 §5.1: std normalization achieves scale invariance across tasks
-    assert samples[2]["advantage"] == 1.25 - 0.05 / 4096
+    # Chapter 4 §5.1: std normalization achieves scale invariance across tasks: (2-1)/1 = 1.0, (10-5)/5 = 1.0
+    assert samples[0]["advantage"] == 1.0
+    assert samples[2]["advantage"] == 1.0
+    assert samples[0]["credit"] == 1.25 - 0.05 / 4096
+
+    # In credit mode, raw shaped credit is kept
+    samples_c, _ = load_qwen_rl_samples(traces, rewards, advantage_mode="credit")
+    assert samples_c[0]["advantage"] == 1.25 - 0.05 / 4096
+    assert samples_c[2]["advantage"] == 1.25 - 0.05 / 4096
 
 
 def test_load_qwen_rl_samples_excludes_unavailable_score_trace(tmp_path):
@@ -673,5 +687,54 @@ def test_load_qwen_rl_samples_reads_real_task_success_from_summary(tmp_path):
     samples, stats = load_qwen_rl_samples([str(trace1), str(trace2)], rewards=[0.8, 0.6])
     assert stats["samples"] == 2
     assert len(samples) == 2
+
+
+def test_load_qwen_rl_samples_calibrated_hybrid_advantage(tmp_path):
+    t1_dir = tmp_path / "task_h1"
+    t2_dir = tmp_path / "task_h2"
+    t1_dir.mkdir()
+    t2_dir.mkdir()
+
+    trace1 = t1_dir / "memory_trace.jsonl"
+    trace2 = t2_dir / "memory_trace.jsonl"
+    summary1 = t1_dir / "summary.json"
+    summary2 = t2_dir / "summary.json"
+
+    # Episode 1: shared memory read productively by a2
+    ev1 = [
+        {"event": "memory_decision", "memory_id": "m1", "controller_prompt": "p1", "controller_output": "out1",
+         "proposal": {"proposal_id": "p1", "task_id": "task_X", "agent_id": "a1", "raw_value": "api schema"},
+         "target": {"visibility": "targeted", "target_recipients": ["a2"]}},
+        {"event": "memory_read", "memory_id": "m1", "reader_id": "a2"},
+        {"event": "memory_proposal", "proposal": {"agent_id": "a2", "raw_value": "implement client"}},
+    ]
+    # Episode 2: absent decision
+    ev2 = [
+        {"event": "memory_decision", "memory_id": None, "controller_prompt": "p2", "controller_output": "out2",
+         "proposal": {"proposal_id": "p2", "task_id": "task_X", "agent_id": "a1", "raw_value": "junk"},
+         "target": {"visibility": "absent"}},
+    ]
+    trace1.write_text("\n".join(json.dumps(e) for e in ev1) + "\n", encoding="utf-8")
+    trace2.write_text("\n".join(json.dumps(e) for e in ev2) + "\n", encoding="utf-8")
+    summary1.write_text(json.dumps({"benchmark": "coding", "task_score": 1.0, "task_success": True}), encoding="utf-8")
+    summary2.write_text(json.dumps({"benchmark": "coding", "task_score": 0.0, "task_success": False}), encoding="utf-8")
+
+    samples, _ = load_qwen_rl_samples(
+        [str(trace1), str(trace2)],
+        rewards=[1.0, 0.0],
+        advantage_mode="hybrid",
+        beta=0.75,
+        lambda_=0.005,
+        target_bonus=0.50,
+        target_card_budget=20,
+        gamma_density=0.02,
+        harmful_penalty=0.05,
+    )
+    assert len(samples) == 2
+    # Successful shared memory has massive positive advantage (> 2.0)
+    assert samples[0]["advantage"] > 2.0
+    # Absent decision in failing episode has negative advantage
+    assert samples[1]["advantage"] < 0.0
+
 
 
