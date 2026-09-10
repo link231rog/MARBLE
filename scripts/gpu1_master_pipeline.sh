@@ -199,8 +199,8 @@ log ">>> [Stage 5/5] Aggregating Table 1 & Master Reports..."
 update_status "aggregating" "95%" "Generating Table 1 & master evaluation report"
 
 $PYTHON_BIN scripts/aggregate_hard_master_table.py \
-    --runs-dir runs \
-    --out runs/table1_v3_results.json
+    --run-dir runs \
+    --out-json runs/table1_v3_results.json
 
 update_status "completed" "100%" "All v3 experiments and evaluations completed on GPU1"
 log "========================================================================"
