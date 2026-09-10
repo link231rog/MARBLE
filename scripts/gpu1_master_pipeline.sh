@@ -182,3 +182,7 @@ update_status "completed" "100%" "All v3 experiments and evaluations completed o
 log "========================================================================"
 log "🎉 MARBLE GPU1 MASTER PIPELINE FULLY COMPLETED!"
 log "========================================================================"
+
+# Teardown all resources to strictly respect lab sharing etiquette
+log ">>> Performing final teardown to release 100% GPU VRAM and resources..."
+./scripts/teardown_gpu1.sh
