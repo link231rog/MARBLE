@@ -127,6 +127,10 @@ while [[ $# -gt 0 ]]; do
             MANIFEST="$2"
             shift 2
             ;;
+        --multi-out)
+            MULTI_OUT="$2"
+            shift 2
+            ;;
         -o|--out)
             OUT_DIR="$2"
             shift 2
@@ -166,10 +170,19 @@ if [ "$BASELINE" == "amem_style" ] || [ "$BASELINE" == "memoryos_style" ]; then
 fi
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-if [ -z "$OUT_DIR" ]; then
-    OUT_DIR="runs/hard_${BASELINE}_${SPLIT}_c${CONCURRENCY}_${TIMESTAMP}"
+if [ -n "${MULTI_OUT:-}" ]; then
+    IFS=',' read -r -a TARGET_OUT_DIRS <<< "$MULTI_OUT"
+    OUT_DIR="${TARGET_OUT_DIRS[0]}"
+elif [[ "$OUT_DIR" == *","* ]]; then
+    IFS=',' read -r -a TARGET_OUT_DIRS <<< "$OUT_DIR"
+    OUT_DIR="${TARGET_OUT_DIRS[0]}"
+else
+    if [ -z "$OUT_DIR" ]; then
+        OUT_DIR="runs/hard_${BASELINE}_${SPLIT}_c${CONCURRENCY}_${TIMESTAMP}"
+    fi
+    TARGET_OUT_DIRS=("$OUT_DIR")
 fi
-mkdir -p "$OUT_DIR"
+mkdir -p "${TARGET_OUT_DIRS[@]}"
 
 echo "======================================================================"
 echo "⚡ MARBLE Master Hard Benchmark Runner (Option B: 24 Test / 12 Train Hard)"
@@ -180,7 +193,11 @@ echo "  Manifest:    $MANIFEST"
 echo "  Max Cards:   $MAX_CARDS"
 echo "  Concurrency: $CONCURRENCY"
 echo "  Port Offset: $PORT_OFFSET"
-echo "  Output Dir:  $OUT_DIR"
+if [ ${#TARGET_OUT_DIRS[@]} -gt 1 ]; then
+    echo "  Multi-Out Targets (${#TARGET_OUT_DIRS[@]}): ${TARGET_OUT_DIRS[*]}"
+else
+    echo "  Output Dir:  $OUT_DIR"
+fi
 [ -n "$CONTROLLER_CHECKPOINT" ] && echo "  Checkpoint:  $CONTROLLER_CHECKPOINT"
 [ -n "$ABLATION" ] && echo "  Ablation:    $ABLATION"
 
@@ -303,6 +320,7 @@ EXTRA_ARGS=""
 launch_db_worker() {
     local task_id="$1"
     local worker_id="$2"
+    local target_out="${3:-$OUT_DIR}"
     local db_port=$((54320 + PORT_OFFSET + worker_id))
     local prom_port=$((55000 + PORT_OFFSET + worker_id))
     local node_port=$((56000 + PORT_OFFSET + worker_id))
@@ -315,6 +333,11 @@ launch_db_worker() {
     local w_key="$(get_worker_key "$worker_id")"
 
     (
+        export PGPORT="$db_port"
+        export PROMETHEUS_PORT="$prom_port"
+        export NODE_EXPORTER_PORT="$node_port"
+        export POSTGRES_EXPORTER_PORT="$pg_exp_port"
+
         if [ "$DB_RUNTIME" == "native" ]; then
             trap '"$REPO_DIR/scripts/native_db_ctl.sh" down "$worker_id" >/dev/null 2>&1 || true' EXIT INT TERM
         else
@@ -375,7 +398,7 @@ launch_db_worker() {
                 --beta "$BETA" \
                 --task-timeout "$TASK_TIMEOUT" \
                 $EXTRA_ARGS \
-                --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log"; then
+                --out "$target_out" 2>&1 | tee -a "$target_out/database_task_${task_id}_w${worker_id}.log"; then
                 echo "[DB Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
                 sleep 5
                 $RUN_PY -u -m marble.experiments.run_benchmark \
@@ -392,7 +415,7 @@ launch_db_worker() {
                     --beta "$BETA" \
                     --task-timeout "$TASK_TIMEOUT" \
                     $EXTRA_ARGS \
-                    --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/database_task_${task_id}_w${worker_id}.log" || true
+                    --out "$target_out" 2>&1 | tee -a "$target_out/database_task_${task_id}_w${worker_id}.log" || true
             fi
         fi
         echo "[DB Worker $worker_id] Finished DB Task $task_id."
@@ -402,6 +425,7 @@ launch_db_worker() {
 launch_research_worker() {
     local task_id="$1"
     local worker_id="$2"
+    local target_out="${3:-$OUT_DIR}"
     local q_key="$(get_qwen_key "$worker_id")"
     local q_base="$(get_qwen_base "$worker_id")"
     local q_model="$(get_qwen_model "$worker_id")"
@@ -443,7 +467,7 @@ launch_research_worker() {
                 --beta "$BETA" \
                 --task-timeout "$TASK_TIMEOUT" \
                 $EXTRA_ARGS \
-                --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log"; then
+                --out "$target_out" 2>&1 | tee -a "$target_out/research_task_${task_id}_w${worker_id}.log"; then
                 echo "[Research Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
                 sleep 5
                 $RUN_PY -u -m marble.experiments.run_benchmark \
@@ -460,7 +484,7 @@ launch_research_worker() {
                     --beta "$BETA" \
                     --task-timeout "$TASK_TIMEOUT" \
                     $EXTRA_ARGS \
-                    --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/research_task_${task_id}_w${worker_id}.log" || true
+                    --out "$target_out" 2>&1 | tee -a "$target_out/research_task_${task_id}_w${worker_id}.log" || true
             fi
         fi
         echo "[Research Worker $worker_id] Finished Research Task $task_id."
@@ -470,6 +494,7 @@ launch_research_worker() {
 launch_coding_worker() {
     local task_id="$1"
     local worker_id="$2"
+    local target_out="${3:-$OUT_DIR}"
     local q_key="$(get_qwen_key "$worker_id")"
     local q_base="$(get_qwen_base "$worker_id")"
     local q_model="$(get_qwen_model "$worker_id")"
@@ -511,7 +536,7 @@ launch_coding_worker() {
                 --beta "$BETA" \
                 --task-timeout "$TASK_TIMEOUT" \
                 $EXTRA_ARGS \
-                --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/coding_task_${task_id}_w${worker_id}.log"; then
+                --out "$target_out" 2>&1 | tee -a "$target_out/coding_task_${task_id}_w${worker_id}.log"; then
                 echo "[Coding Worker $worker_id] Task $task_id exited with error/429. Auto-retrying after 5s..."
                 sleep 5
                 $RUN_PY -u -m marble.experiments.run_benchmark \
@@ -528,7 +553,7 @@ launch_coding_worker() {
                     --beta "$BETA" \
                     --task-timeout "$TASK_TIMEOUT" \
                     $EXTRA_ARGS \
-                    --out "$OUT_DIR" 2>&1 | tee -a "$OUT_DIR/coding_task_${task_id}_w${worker_id}.log" || true
+                    --out "$target_out" 2>&1 | tee -a "$target_out/coding_task_${task_id}_w${worker_id}.log" || true
             fi
         fi
         echo "[Coding Worker $worker_id] Finished Coding Task $task_id."
@@ -543,28 +568,30 @@ echo "🚀 [Dynamic Worker Pool Mode] Launching across $CONCURRENCY parallel wor
 echo "======================================================================"
 
 QUEUE_FILE="$OUT_DIR/.task_queue"
-mkdir -p "$OUT_DIR"
+mkdir -p "${TARGET_OUT_DIRS[@]}"
 > "$QUEUE_FILE"
 
-# Enqueue all tasks: Database, Research, Coding
-if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
-    for tid in ${DB_TASKS[@]+"${DB_TASKS[@]}"}; do
-        [ -n "$tid" ] && echo "database:$tid" >> "$QUEUE_FILE"
-    done
-fi
-if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
-    for tid in ${RESEARCH_TASKS[@]+"${RESEARCH_TASKS[@]}"}; do
-        [ -n "$tid" ] && echo "research:$tid" >> "$QUEUE_FILE"
-    done
-fi
-if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ]; then
-    for tid in ${CODING_TASKS[@]+"${CODING_TASKS[@]}"}; do
-        [ -n "$tid" ] && echo "coding:$tid" >> "$QUEUE_FILE"
-    done
-fi
+# Enqueue all tasks across all target output directories
+for target_out in "${TARGET_OUT_DIRS[@]}"; do
+    if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "database" ]; then
+        for tid in ${DB_TASKS[@]+"${DB_TASKS[@]}"}; do
+            [ -n "$tid" ] && echo "$target_out:database:$tid" >> "$QUEUE_FILE"
+        done
+    fi
+    if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "research" ]; then
+        for tid in ${RESEARCH_TASKS[@]+"${RESEARCH_TASKS[@]}"}; do
+            [ -n "$tid" ] && echo "$target_out:research:$tid" >> "$QUEUE_FILE"
+        done
+    fi
+    if [ "$BENCHMARK_TARGET" == "all" ] || [ "$BENCHMARK_TARGET" == "coding" ]; then
+        for tid in ${CODING_TASKS[@]+"${CODING_TASKS[@]}"}; do
+            [ -n "$tid" ] && echo "$target_out:coding:$tid" >> "$QUEUE_FILE"
+        done
+    fi
+done
 
 TOTAL_QUEUED=$(wc -l < "$QUEUE_FILE" | tr -d " ")
-echo "Loaded $TOTAL_QUEUED total tasks into Dynamic Worker Pool queue."
+echo "Loaded $TOTAL_QUEUED total tasks across ${#TARGET_OUT_DIRS[@]} target directories into Dynamic Worker Pool queue."
 
 pop_dynamic_task() {
     "$RUN_PY" -c "
@@ -596,27 +623,41 @@ worker_slot_loop() {
             break
         fi
 
-        local bench="${item%%:*}"
-        local tid="${item##*:}"
+        local target_out="$OUT_DIR"
+        local bench=""
+        local tid=""
+
+        # Support multi-target item format: <target_out_dir>:<benchmark>:<task_id>
+        if [[ "$item" == *:*":*"* ]]; then
+            target_out="${item%%:*}"
+            local rest="${item#*:}"
+            bench="${rest%%:*}"
+            tid="${rest##*:}"
+        else
+            bench="${item%%:*}"
+            tid="${item##*:}"
+        fi
+
+        mkdir -p "$target_out"
 
         # Fast-path idempotency: skip if already completed with status: ok
-        local sum_file="$(find "$OUT_DIR" -path "*/$bench/$tid/summary.json" 2>/dev/null | head -n 1)"
+        local sum_file="$(find "$target_out" -path "*/$bench/$tid/summary.json" 2>/dev/null | head -n 1)"
         if [ -n "$sum_file" ] && [ -f "$sum_file" ]; then
             if grep -q '"status": "ok"' "$sum_file" 2>/dev/null; then
-                echo "[Worker Pool Slot $slot_id] ⏭️ Task $bench $tid already completed (status=ok). Skipping."
+                echo "[Worker Pool Slot $slot_id] ⏭️ Task $bench $tid in $(basename "$target_out") already completed (status=ok). Skipping."
                 continue
             fi
         fi
 
-        echo "[Worker Pool Slot $slot_id] ==> Claimed task: $bench $tid"
+        echo "[Worker Pool Slot $slot_id] ==> Claimed task: $bench $tid (Target: $(basename "$target_out"))"
         if [ "$bench" == "database" ]; then
-            launch_db_worker "$tid" "$slot_id"
+            launch_db_worker "$tid" "$slot_id" "$target_out"
         elif [ "$bench" == "research" ]; then
-            launch_research_worker "$tid" "$slot_id"
+            launch_research_worker "$tid" "$slot_id" "$target_out"
         elif [ "$bench" == "coding" ]; then
-            launch_coding_worker "$tid" "$slot_id"
+            launch_coding_worker "$tid" "$slot_id" "$target_out"
         fi
-        echo "[Worker Pool Slot $slot_id] <== Completed task: $bench $tid"
+        echo "[Worker Pool Slot $slot_id] <== Completed task: $bench $tid (Target: $(basename "$target_out"))"
     done
 }
 
@@ -635,6 +676,7 @@ echo ">>> All dynamic worker slots successfully finished all tasks!"
 # automatically retried and resolved before aggregation and exit.
 # ------------------------------------------------------------------------------
 check_and_retry_missing_tasks() {
+    local target_dir="${1:-$OUT_DIR}"
     local max_retries=2
     local attempt=1
 
@@ -646,7 +688,7 @@ import glob, json, sys
 manifest_path = '$MANIFEST'
 split = '$SPLIT'
 target = '$BENCHMARK_TARGET'
-out_dir = '$OUT_DIR'
+out_dir = '$target_dir'
 
 with open(manifest_path, 'r', encoding='utf-8') as f:
     manifest = json.load(f)
@@ -673,14 +715,14 @@ print(json.dumps(missing))
 " 2>/dev/null || echo "[]")"
 
         if [ "$missing_json" == "[]" ] || [ -z "$missing_json" ]; then
-            echo "✅ All expected tasks verified present and completed (status=ok) in $OUT_DIR!"
+            echo "✅ All expected tasks verified present and completed (status=ok) in $target_dir!"
             break
         fi
 
         echo "======================================================================"
-        echo "⚠️ [Auto-Healing Sweep $attempt/$max_retries] Detected missing or incomplete tasks:"
+        echo "⚠️ [Auto-Healing Sweep $attempt/$max_retries] Detected missing or incomplete tasks in $target_dir:"
         echo "   Missing: $missing_json"
-        echo "   Cleaning docker sandboxes and retrying failed/rate-limited tasks..."
+        echo "   Cleaning sandboxes and retrying failed/rate-limited tasks..."
         echo "======================================================================"
 
         if [ "$DB_RUNTIME" == "native" ]; then
@@ -697,15 +739,15 @@ print(json.dumps(missing))
 
         while read -r bn tid; do
             [ -z "$bn" ] && continue
-            echo "⚡ [Auto-Retry Parallel] Dispatching Baseline $BASELINE | $bn Task $tid..."
+            echo "⚡ [Auto-Retry Parallel] Dispatching Baseline $BASELINE | $bn Task $tid (Target: $(basename "$target_dir"))..."
             if [ "$bn" == "database" ]; then
-                launch_db_worker "$tid" "$db_w" &
+                launch_db_worker "$tid" "$db_w" "$target_dir" &
                 db_w=$(( (db_w + 1) % 8 ))
             elif [ "$bn" == "research" ]; then
-                launch_research_worker "$tid" "$res_w" &
+                launch_research_worker "$tid" "$res_w" "$target_dir" &
                 res_w=$(( res_w + 1 ))
             elif [ "$bn" == "coding" ]; then
-                launch_coding_worker "$tid" "$cod_w" &
+                launch_coding_worker "$tid" "$cod_w" "$target_dir" &
                 cod_w=$(( cod_w + 1 ))
             fi
         done < <("$RUN_PY" -c "import json, sys; [print(f'{b} {t}') for b, t in json.loads('$missing_json')]")
@@ -718,7 +760,9 @@ print(json.dumps(missing))
     done
 }
 
-check_and_retry_missing_tasks
+for target_dir in "${TARGET_OUT_DIRS[@]}"; do
+    check_and_retry_missing_tasks "$target_dir"
+done
 
 # ------------------------------------------------------------------------------
 # Aggregate & Report Evaluation Results
@@ -726,12 +770,14 @@ check_and_retry_missing_tasks
 echo "======================================================================"
 echo "📊 Aggregating Evaluation Results..."
 echo "======================================================================"
-$RUN_PY -m marble.experiments.evaluate \
-    --run-dir "$OUT_DIR" \
-    --manifest "$MANIFEST" \
-    --split "$SPLIT" || true
+for target_dir in "${TARGET_OUT_DIRS[@]}"; do
+    $RUN_PY -m marble.experiments.evaluate \
+        --run-dir "$target_dir" \
+        --manifest "$MANIFEST" \
+        --split "$SPLIT" || true
+done
 
 echo "======================================================================"
 echo "✅ All $SPLIT episodes finished for baseline '$BASELINE'!"
-echo "   Results directory: $OUT_DIR"
+echo "   Results directories: ${TARGET_OUT_DIRS[*]}"
 echo "======================================================================"

@@ -58,52 +58,28 @@ log ">>> Verifying vLLM inference server on 127.0.0.1:8000..."
 ./scripts/gpu1_vllm_ctl.sh start
 
 # ------------------------------------------------------------------------------
-# Stage 1: Ensure Rollout 1~3 are complete, then run Rollout 4 (16 workers)
+# Stage 1: Ensure Rollouts 1~4 are complete (Unified Dynamic Multi-Rollout Queue)
 # ------------------------------------------------------------------------------
 OUT_BASE="runs/rl_v3_rollouts"
 MANIFEST="configs/experiments/rl_train_12tasks_hard.json"
 
-log ">>> [Stage 1/5] Checking existing rollouts in $OUT_BASE..."
+mkdir -p "$OUT_BASE/rollout_1" "$OUT_BASE/rollout_2" "$OUT_BASE/rollout_3" "$OUT_BASE/rollout_4"
 
-# Ensure Rollout 3 has all 12 tasks
-R3_COUNT=$(find "$OUT_BASE/rollout_3" -name "summary.json" 2>/dev/null | wc -l | tr -d ' ')
-log ">>> Rollout 3 completed tasks: $R3_COUNT / 12"
-if [ "$R3_COUNT" -lt 12 ]; then
-    log ">>> Completing remaining task(s) in Rollout 3 on GPU1..."
-    update_status "rollout_3_healing" "20%" "Finishing remaining tasks in Rollout 3 (16 workers)"
-    ./scripts/run_hard_benchmark_pool.sh \
-        --baseline ours_sft \
-        --manifest "$MANIFEST" \
-        --split train_hard \
-        --concurrency 16 \
-        --seed 42 \
-        --qwen-temperature 0.7 \
-        --controller-checkpoint runs/checkpoints/qwen_sft_v3 \
-        --qwen-api-model qwen_sft_v3 \
-        --out "$OUT_BASE/rollout_3"
-    log ">>> Rollout 3 verified complete!"
-fi
+log ">>> [Stage 1/5] Running Global Dynamic Queue across Rollouts (16-Worker Concurrency)..."
+update_status "rollout_multi_queue" "25%" "Executing dynamic cross-rollout queue (16 workers)"
 
-# Ensure Rollout 4 has all 12 tasks
-R4_COUNT=$(find "$OUT_BASE/rollout_4" -name "summary.json" 2>/dev/null | wc -l | tr -d ' ')
-log ">>> Rollout 4 completed tasks: $R4_COUNT / 12"
-if [ "$R4_COUNT" -lt 12 ]; then
-    log ">>> Executing Rollout 4 across 12 hard tasks (16 parallel workers)..."
-    update_status "rollout_4" "25%" "Executing Rollout 4 across 12 hard tasks (16 workers)"
-    ./scripts/run_hard_benchmark_pool.sh \
-        --baseline ours_sft \
-        --manifest "$MANIFEST" \
-        --split train_hard \
-        --concurrency 16 \
-        --seed 42 \
-        --qwen-temperature 0.7 \
-        --controller-checkpoint runs/checkpoints/qwen_sft_v3 \
-        --qwen-api-model qwen_sft_v3 \
-        --out "$OUT_BASE/rollout_4"
-    log ">>> Rollout 4 completed successfully!"
-else
-    log ">>> Full 12 tasks in Rollout 4 already present. Proceeding to GRPO."
-fi
+./scripts/run_hard_benchmark_pool.sh \
+    --baseline ours_sft \
+    --manifest "$MANIFEST" \
+    --split train_hard \
+    --concurrency 16 \
+    --seed 42 \
+    --qwen-temperature 0.7 \
+    --controller-checkpoint runs/checkpoints/qwen_sft_v3 \
+    --qwen-api-model qwen_sft_v3 \
+    --multi-out "$OUT_BASE/rollout_3,$OUT_BASE/rollout_4"
+
+log ">>> Rollouts 1~4 verified complete via Global Dynamic Queue!"
 
 # ------------------------------------------------------------------------------
 # Stage 2: Train qwen_rl_v3 with calibrated hybrid GRPO on H20
