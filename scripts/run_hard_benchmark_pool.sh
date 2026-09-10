@@ -628,14 +628,16 @@ worker_slot_loop() {
         local tid=""
 
         # Support multi-target item format: <target_out_dir>:<benchmark>:<task_id>
-        if [[ "$item" == *:*":*"* ]]; then
-            target_out="${item%%:*}"
-            local rest="${item#*:}"
-            bench="${rest%%:*}"
-            tid="${rest##*:}"
+        local f1="" f2="" f3=""
+        IFS=':' read -r f1 f2 f3 <<< "$item"
+        if [ -n "$f3" ]; then
+            target_out="$f1"
+            bench="$f2"
+            tid="$f3"
         else
-            bench="${item%%:*}"
-            tid="${item##*:}"
+            target_out="$OUT_DIR"
+            bench="$f1"
+            tid="$f2"
         fi
 
         mkdir -p "$target_out"
