@@ -6,6 +6,7 @@ from marble.controllers import (
     AbsentController,
     GlobalAlwaysController,
     HeuristicController,
+    LTSStyleController,
     PrivateOnlyController,
 )
 from marble.memory import (
@@ -43,7 +44,6 @@ def card(memory_id: str, title: str) -> MemoryCard:
         task_id="task-1",
         title=title,
         visibility="global",
-        owner_id=None,
     )
 
 
@@ -52,7 +52,7 @@ def test_global_always_controller_admits_everything() -> None:
 
     assert target.exists is True
     assert target.visibility == "global"
-    assert target.owner_id is None
+    assert target.target_recipients == ()
     assert target.supersedes is None
 
 
@@ -67,8 +67,8 @@ def test_private_only_controller_owns_by_agent() -> None:
     target = PrivateOnlyController().decide(proposal(agent_id="a9"), [])
 
     assert target.exists is True
-    assert target.visibility == "private"
-    assert target.owner_id == "a9"
+    assert target.visibility == "targeted"
+    assert target.target_recipients == ("a9",)
 
 
 def test_controllers_supersede_duplicate_title() -> None:
@@ -90,12 +90,20 @@ def test_heuristic_controller_rules() -> None:
     shared = controller.decide(proposal(title="Team decision on schema"), [])
     assert (shared.exists, shared.visibility) == (True, "global")
 
-    private = controller.decide(proposal(agent_id="a3", title="Local scratch"), [])
-    assert (private.exists, private.visibility, private.owner_id) == (
+    targeted = controller.decide(proposal(agent_id="a3", title="Local scratch"), [])
+    assert (targeted.exists, targeted.visibility, targeted.target_recipients) == (
         True,
-        "private",
-        "a3",
+        "targeted",
+        ("a3",),
     )
+
+
+def test_lts_style_controller_is_strictly_binary() -> None:
+    controller = LTSStyleController()
+
+    assert controller.decide(proposal(title="Local scratch"), []).visibility == "absent"
+    target = controller.decide(proposal(title="Shared team decision"), [])
+    assert (target.exists, target.visibility) == (True, "global")
 
 
 def test_retriever_ranks_and_cuts() -> None:

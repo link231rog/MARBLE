@@ -14,6 +14,7 @@ class WorldSimulationEnvironment(BaseEnvironment):
             config (Dict[str, Any]): Configuration including agents and task settings.
         """
         super().__init__(name, config)
+        self.agreement_reached = False
         # Register actions
         self.register_action(
             "offer_price",
@@ -174,6 +175,7 @@ class WorldSimulationEnvironment(BaseEnvironment):
     def _accept_offer_handler(self) -> Dict[str, Any]:
         # Logic for accepting an offer
         # print("*********************action handler _accept_offer_handler*********************") # debug info
+        self.agreement_reached = True
         response = {
             "success": True,
             "message": "Offer accepted. Negotiation concluded.",

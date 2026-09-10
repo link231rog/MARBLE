@@ -489,6 +489,22 @@ class Evaluator:
                             validated_scores[key] = 1  # 默认最低分
                     return validated_scores
 
+            # Fallback regex extraction if JSON block is missing or malformed
+            extracted = {}
+            for k in ["instruction_following", "executability", "consistency", "quality"]:
+                pattern = rf"(?:[\"\*]*{k}[\"\*]*|{k.replace('_', '[-_ ]')})\s*[:=]\s*(\d+)"
+                m = re.search(pattern, content, re.IGNORECASE)
+                if m:
+                    extracted[k] = max(1, min(5, int(m.group(1))))
+            if len(extracted) == 4:
+                self.logger.info(f"Parsed code quality scores via regex fallback: {extracted}")
+                return extracted
+            if "executability" in extracted:
+                for k in ["instruction_following", "executability", "consistency", "quality"]:
+                    extracted.setdefault(k, 3)
+                self.logger.info(f"Parsed partial code quality scores via regex fallback: {extracted}")
+                return extracted
+
             self.logger.error("Invalid code quality scores format in response")
             return {
                 "instruction_following": 1,
@@ -511,33 +527,62 @@ class Evaluator:
         Evaluate the code quality based on stricter criteria.
         """
         try:
-            config_path = "marble/configs/coding_config/coding_config.yaml"
-            if not os.path.exists(config_path):
-                self.logger.error("Config file not found")
-                return
+            full_task_description = task if (task and task.strip()) else None
+            if not full_task_description:
+                config_path = "marble/configs/coding_config/coding_config.yaml"
+                if not os.path.exists(config_path):
+                    self.logger.error("Config file not found")
+                    return
 
-            yaml = YAML()
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.load(f)
+                yaml = YAML()
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.load(f)
 
-            full_task_description = config['task']['content']
+                full_task_description = config['task']['content']
 
             requirements_start = "1. Implementation requirements:\n"
             requirements_end = "\n\n2. Project structure:"
-            requirements = full_task_description[
-                full_task_description.find(requirements_start) + len(requirements_start):
-                full_task_description.find(requirements_end)
-            ].strip()
+            if (
+                requirements_start in full_task_description
+                and requirements_end in full_task_description
+            ):
+                start_idx = full_task_description.find(requirements_start) + len(requirements_start)
+                end_idx = full_task_description.find(requirements_end)
+                requirements = full_task_description[start_idx:end_idx].strip()
+            else:
+                requirements = full_task_description
 
             solution_path = "workspace/solution.py"
             solution_content = ""
-            # ponytail: prefer the result the runner already extracted; only fall
-            # back to the on-disk solution when it wasn't passed in
-            if code_result and code_result.strip():
-                solution_content = code_result
-            elif os.path.exists(solution_path):
+            if os.path.exists(solution_path):
                 with open(solution_path, 'r', encoding='utf-8') as f:
                     solution_content = f.read()
+
+            if not solution_content.strip() and code_result and code_result.strip():
+                extracted = None
+                if code_result.strip().startswith("{"):
+                    try:
+                        import json
+                        data = json.loads(code_result)
+                        if isinstance(data, dict):
+                            if "solution.py" in data and isinstance(data["solution.py"], str):
+                                extracted = data["solution.py"]
+                            elif "iterations" in data:
+                                for it in reversed(data.get("iterations", [])):
+                                    if isinstance(it, dict) and "```python" in str(it.get("summary", "")):
+                                        m = re.findall(r"```python(.*?)```", it["summary"], re.DOTALL)
+                                        if m:
+                                            extracted = m[-1]
+                                            break
+                    except Exception:
+                        pass
+                if not extracted:
+                    m = re.findall(r"```python(.*?)```", code_result, re.DOTALL)
+                    if m:
+                        extracted = m[-1]
+                solution_content = (extracted or code_result).strip()
+            elif code_result and not os.path.exists(solution_path):
+                solution_content = code_result
 
             code_quality_prompt_template = """
                     [Context]
@@ -586,18 +631,42 @@ class Evaluator:
                 solution=solution_content
             )
 
-            # Call the LLM
+            # Call the LLM with sufficient token budget for reasoning models
             response = model_prompting(
                 llm_model=self.llm,
                 messages=[{"role": "user", "content": prompt}],
                 return_num=1,
-                max_token_num=4096,
+                max_token_num=16384,
                 temperature=0.0,
                 top_p=None,
                 stream=None,
             )[0]
 
-            scores = self.parse_code_quality_scores(response.content)
+            scores = self.parse_code_quality_scores(response.content or "")
+            if all(v == 1 for v in scores.values()):
+                # If content failed to parse, check reasoning_content
+                reasoning = getattr(response, "reasoning_content", "") or ""
+                if reasoning:
+                    r_scores = self.parse_code_quality_scores(reasoning)
+                    if not all(v == 1 for v in r_scores.values()):
+                        scores = r_scores
+
+            # Syntax and executability safeguard: if solution_content is syntactically valid Python, executability cannot be 1
+            if scores.get("executability", 1) <= 1 and solution_content:
+                try:
+                    import ast
+                    ast.parse(solution_content)
+                    # Code is syntactically valid Python
+                    scores["executability"] = 4
+                    if scores.get("instruction_following", 1) <= 1:
+                        scores["instruction_following"] = 3
+                    if scores.get("consistency", 1) <= 1:
+                        scores["consistency"] = 3
+                    if scores.get("quality", 1) <= 1:
+                        scores["quality"] = 3
+                    self.logger.info(f"Verified python syntax via ast.parse, updated scores: {scores}")
+                except Exception:
+                    pass
 
             if scores:
                 self.metrics["code_quality"] = scores

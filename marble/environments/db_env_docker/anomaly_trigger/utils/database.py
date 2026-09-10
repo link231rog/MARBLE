@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import random
 import time
 from enum import IntEnum
@@ -13,7 +14,7 @@ DB_CONFIG = {
     "user": "test",  # 替换为你的数据库用户名
     "password": "Test123_456",  # 替换为你的数据库密码
     "host": "localhost",  # 替换为你的数据库主机地址
-    "port": 5432,
+    "port": int(os.getenv("MARBLE_DB_PORT", "5432")),
     # "dbtype": "postgresql"
 }
 

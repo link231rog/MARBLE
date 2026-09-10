@@ -1,6 +1,8 @@
 import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List
 
@@ -27,7 +29,8 @@ def split_sql_statements(sql: str) -> List[str]:
 def get_prometheus_metric_data(
     metric_name: str, start_time: float, end_time: float, step: int = 1
 ) -> List[List[Any]]:
-    prom_url = "http://localhost:9090/api/v1/query_range"
+    prom_port = os.getenv("MARBLE_PROM_PORT", "9090")
+    prom_url = f"http://localhost:{prom_port}/api/v1/query_range"
     params = {
         "query": metric_name,
         "start": start_time,
@@ -81,15 +84,38 @@ class DBEnvironment(BaseEnvironment):
         print(self.get_slow_query_handler())
 
     def start_docker_containers(self):
-        print("Starting Docker containers...")
+        runtime_mode = os.getenv("MARBLE_DB_RUNTIME", "auto")
+        use_native = (runtime_mode == "native") or (shutil.which("docker") is None)
+        if use_native:
+            if self.check_db_connection():
+                print("Native database runtime is already active and reachable.")
+                return
+            worker_id = os.getenv("MARBLE_WORKER_ID", "0")
+            db_port = os.getenv("MARBLE_DB_PORT", "54320")
+            prom_port = os.getenv("MARBLE_PROM_PORT", "55000")
+            node_port = os.getenv("MARBLE_NODE_PORT", "56000")
+            pg_exp_port = os.getenv("MARBLE_PG_EXPORTER_PORT", "57000")
+            script_path = os.path.abspath(os.path.join(self.current_dir, "..", "..", "scripts", "native_db_ctl.sh"))
+            if os.path.exists(script_path):
+                print(f"Starting native DB stack via {script_path} (worker={worker_id})...")
+                subprocess.run(
+                    [script_path, "up", str(worker_id), str(db_port), str(prom_port), str(node_port), str(pg_exp_port)],
+                    check=True,
+                )
+            else:
+                print(f"Warning: native_db_ctl.sh not found at {script_path}")
+            return
+
+        project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
+        print(f"Starting Docker containers (project={project})...")
         subprocess.run(
-            ["sudo", "docker", "compose", "down", "-v"],
+            ["docker", "compose", "-p", project, "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             shell=False,
-            check=True,
+            check=False,
         )
         subprocess.run(
-            ["sudo", "docker", "compose", "up", "-d", "--remove-orphans"],
+            ["docker", "compose", "-p", project, "up", "-d", "--remove-orphans"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
             check=True,
         )
@@ -101,12 +127,13 @@ class DBEnvironment(BaseEnvironment):
         init_sql = config.get("init_sql", None)
         test_sql = config.get("test_sql", None)
 
+        db_port = os.getenv("MARBLE_DB_PORT", "5432")
         connection = psycopg2.connect(
             user="test",
             password="Test123_456",
             database="sysbench",
             host="localhost",
-            port="5432",
+            port=db_port,
         )
         cursor = connection.cursor()
         connection.autocommit = True
@@ -123,7 +150,7 @@ class DBEnvironment(BaseEnvironment):
         cursor.execute("RESET client_min_messages;")
         print("Warning messages turned on.")
 
-        cursor.execute("CREATE EXTENSION pg_stat_statements;")
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;")
 
         # interactive sql shell
         # while True:
@@ -149,7 +176,7 @@ class DBEnvironment(BaseEnvironment):
                 colsize = anomaly["colsize"]
                 subprocess.run(
                     [
-                        "python",
+                        sys.executable,
                         "main.py",
                         "--anomaly",
                         anomaly_type,
@@ -408,7 +435,7 @@ class DBEnvironment(BaseEnvironment):
             "This function is STILL IN DEVELOPMENT. Please try again later."
         )
         # use a command
-        result = os.popen("sudo docker logs -tf db_env_docker-postgres_db-1").read()
+        result = os.popen("docker logs -tf db_env_docker-postgres_db-1").read()
         # get last 100 lines and make it string
         result = "\n".join(result.split("\n")[-100:])
         if result:
@@ -514,13 +541,14 @@ class DBEnvironment(BaseEnvironment):
             }
 
     def query_db_handler(self, sql: str) -> Dict[str, Any]:
+        db_port = os.getenv("MARBLE_DB_PORT", "5432")
         try:
             connection = psycopg2.connect(
                 user="test",
                 password="Test123_456",
                 database="sysbench",
                 host="localhost",
-                port="5432",
+                port=db_port,
             )
             cursor = connection.cursor()
             sql_queries = split_sql_statements(sql)
@@ -615,7 +643,8 @@ class DBEnvironment(BaseEnvironment):
         return f"Here are the commands that took longest time:\n{obtain_slow_queries()}"
 
     def get_raw_alerts(self) -> dict:
-        prom_url = "http://localhost:9090/api/v1/alerts"
+        prom_port = os.getenv("MARBLE_PROM_PORT", "9090")
+        prom_url = f"http://localhost:{prom_port}/api/v1/alerts"
         response = requests.get(prom_url)
         if response.status_code == 200:
             data = response.json()
@@ -631,13 +660,14 @@ class DBEnvironment(BaseEnvironment):
             )
 
     def check_db_connection(self) -> bool:
+        db_port = os.getenv("MARBLE_DB_PORT", "5432")
         try:
             connection = psycopg2.connect(
                 user="test",
                 password="Test123_456",
                 database="sysbench",
                 host="localhost",
-                port="5432",
+                port=db_port,
             )
             print("Database is up!")
             connection.close()
@@ -647,10 +677,23 @@ class DBEnvironment(BaseEnvironment):
             return False
 
     def terminate(self) -> None:
+        runtime_mode = os.getenv("MARBLE_DB_RUNTIME", "auto")
+        use_native = (runtime_mode == "native") or (shutil.which("docker") is None)
+        if use_native:
+            if os.getenv("MARBLE_MANAGED_STACK") == "1":
+                # Stack lifecycle managed by outer script/trap
+                return
+            worker_id = os.getenv("MARBLE_WORKER_ID", "0")
+            script_path = os.path.abspath(os.path.join(self.current_dir, "..", "..", "scripts", "native_db_ctl.sh"))
+            if os.path.exists(script_path):
+                subprocess.run([script_path, "down", str(worker_id)], check=False)
+            return
+
+        project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
         subprocess.run(
-            ["sudo", "docker", "compose", "down"],
+            ["docker", "compose", "-p", project, "down", "-v"],
             cwd=os.path.join(self.current_dir, "db_env_docker"),
-            check=True,
+            check=False,
         )
 
 

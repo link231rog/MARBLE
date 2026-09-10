@@ -30,13 +30,33 @@ class EpisodeStats:
     communication_tokens: int = 0
     token_budget: int = _TOKEN_BUDGET
 
+    @property
+    def memory_cost(self) -> float:
+        budget = max(self.token_budget, 1)
+        return (
+            self.read_tokens + self.active_global_tokens + self.communication_tokens
+        ) / budget
 
-def episode_reward(stats: EpisodeStats) -> float:
-    budget = max(stats.token_budget, 1)
-    memory_cost = (
-        stats.read_tokens + stats.active_global_tokens + stats.communication_tokens
-    ) / budget
-    return stats.task_score - LAMBDA * memory_cost
+
+def episode_reward(
+    stats: EpisodeStats,
+    beta: float = BETA,
+    lambda_: float = LAMBDA,
+) -> float:
+    productive_reads = float(getattr(stats, "productive_cross_reads", 0) or 0.0)
+    collab_bonus = beta * min(1.0, productive_reads / 4.0)
+    return stats.task_score + collab_bonus - lambda_ * stats.memory_cost
+
+
+def measured_memory_cost(events: List[Dict[str, Any]], token_budget: int = _TOKEN_BUDGET) -> float:
+    """Return variable memory-context tokens from one episode trace."""
+    total = 0
+    for event in events:
+        if event.get("event") != "memory_decision":
+            continue
+        total += int(event.get("memory_card_tokens", 0) or 0)
+        total += int(event.get("injected_memory_tokens", 0) or 0)
+    return total / max(token_budget, 1)
 
 
 def proposal_rewards(
@@ -45,40 +65,162 @@ def proposal_rewards(
     same_task_baseline: float = 0.0,
     beta: float | None = None,
     lambda_: float | None = None,
+    outcome_gated: bool = False,
+    pass_at_1: float | None = None,
+    target_card_budget: int = 12,
+    gamma_density: float = 0.0,
+    task_success: bool | None = None,
+    harmful_penalty: float = 0.2,
+    advantage: float | None = None,
+    target_bonus: float = 0.3,
 ) -> Dict[str, float]:
-    """G_i per stored proposal from one episode's trace events (doc §Reward).
+    """G_i per proposal from one episode's trace events (Chapter 6 Credit Assignment).
 
-    A_e = task_score - same_task_baseline (same-task relative advantage).
-    With no comparable rollout, pass same_task_baseline=0 (no advantage signal).
+    A = group_normalized_task_score or relative advantage (task_score - same_task_baseline).
+    Credit rules:
+    - ABSENT (or no memory_id): memory_credit = 0.0 (no free advantage for inaction)
+    - Stored, unread: memory_credit = -lambda * cost - dp
+    - Stored, author read: memory_credit = A - lambda * cost - dp
+    - Stored, productive cross-agent read (reader != author, real memory, subsequent action, A > 0):
+        memory_credit = A * (1 + beta) + target_bonus (if targeted hit) - lambda * cost - dp
+    - Stored, harmful cross-agent read (reader != author, task failed and below baseline):
+        memory_credit = A - lambda * cost - dp - harmful_penalty
     """
     b = BETA if beta is None else beta
     lam = LAMBDA if lambda_ is None else lambda_
-    stored: Dict[str, Dict[str, Any]] = {}
+    proposals_data: List[Dict[str, Any]] = []
+    global_cards_count = 0
+    owners: Dict[str, str] = {}
+
     for ev in events:
         if ev.get("event") != "memory_decision":
             continue
         mid = ev.get("memory_id")
-        if not mid:
-            continue
-        proposal = ev["proposal"]
-        stored[mid] = {
-            "owner": proposal["agent_id"],
-            "tokens": token_count(proposal.get("raw_value", "")),
-        }
-    readers: Dict[str, List[str]] = {}
-    for ev in events:
-        if ev.get("event") == "memory_read":
-            readers.setdefault(ev["memory_id"], []).append(ev["reader_id"])
+        target = ev.get("target") or {}
+        vis = target.get("visibility")
+        if vis == "global" and mid:
+            global_cards_count += 1
+        proposal = ev.get("proposal") or {}
+        pid = proposal.get("proposal_id")
+        author = proposal.get("agent_id")
+        if mid and author:
+            owners[mid] = author
+        tokens = float(ev.get("memory_cost_tokens", token_count(proposal.get("raw_value", ""))))
+        proposals_data.append({
+            "pid": pid,
+            "mid": mid,
+            "author": author,
+            "owner": author,
+            "tokens": tokens,
+            "visibility": vis,
+            "target_recipients": target.get("target_recipients", ()),
+            "parse_status": ev.get("parse_status", "valid_json"),
+        })
 
-    advantage = task_score - same_task_baseline
+    for ev in events:
+        if ev.get("event") in {"g_memory_operation", "memory_r1_operation", "collabmem_operation", "copper_operation"}:
+            mid = ev.get("memory_id")
+            aid = ev.get("agent_id") or (ev.get("proposal") or {}).get("agent_id")
+            if mid and aid:
+                owners[mid] = aid
+
+    read_events = [ev for ev in events if ev.get("event") == "memory_read" and ev.get("memory_id")]
+    readers: Dict[str, List[str]] = {}
+    for ev in read_events:
+        readers.setdefault(ev["memory_id"], []).append(ev["reader_id"])
+
+    if advantage is not None:
+        A = float(advantage)
+    else:
+        A = float(task_score) - float(same_task_baseline)
+
+    # SimPO-style memory density penalty (only active when gamma_density > 0)
+    density_penalty = 0.0
+    if global_cards_count > target_card_budget and target_card_budget > 0 and gamma_density > 0:
+        density_penalty = gamma_density * (global_cards_count - target_card_budget) / target_card_budget
+
+    # Success determination (support explicit boolean/numeric task_success, else fallback to score threshold)
+    if task_success is not None:
+        is_success = bool(task_success) if not isinstance(task_success, (int, float)) else (float(task_success) >= 0.5)
+    elif pass_at_1 is not None:
+        is_success = (pass_at_1 >= 1.0)
+    else:
+        is_success = (task_score >= 1.0)
+
     credits: Dict[str, float] = {}
-    for mid, info in stored.items():
-        cost = info["tokens"] / _TOKEN_BUDGET
-        was_read = mid in readers
-        if not was_read:
-            credits[mid] = -lam * cost
-            continue
-        non_owner = any(r != info["owner"] for r in readers[mid])
-        mult = 1 + b * (1 if non_owner else 0)
-        credits[mid] = advantage * mult - lam * cost
+    for p_info in proposals_data:
+        pid = p_info["pid"]
+        mid = p_info["mid"]
+        vis = p_info["visibility"]
+
+        # Rule 1: ABSENT or unsaved decisions get 0.0 credit (no free advantage)
+        if vis == "absent" or not mid:
+            credit_val = 0.0
+        else:
+            cost = p_info["tokens"] / _TOKEN_BUDGET
+            was_read = mid in readers
+            dp = density_penalty if vis == "global" else 0.0
+
+            if not was_read:
+                # Rule 2: Unread stored memory incurs storage cost and density penalty
+                credit_val = -lam * cost - dp
+            else:
+                author = p_info.get("author") or p_info.get("owner") or owners.get(mid)
+                mid_reads = [r for r in read_events if r.get("memory_id") == mid]
+                non_author_reads = [r for r in mid_reads if r.get("reader_id") and r.get("reader_id") != author]
+                target_recipients = set(p_info.get("target_recipients") or ())
+                is_target_hit = any(r.get("reader_id") in target_recipients for r in non_author_reads)
+
+                if not non_author_reads:
+                    # Rule 3: Read by author only
+                    credit_val = A - lam * cost - dp
+                else:
+                    # Cross-agent read present: check if productive (subsequent action by reader)
+                    is_effective = False
+                    for r_ev in non_author_reads:
+                        r_id = r_ev.get("reader_id")
+                        try:
+                            r_idx = events.index(r_ev)
+                        except ValueError:
+                            r_idx = -1
+                        if r_idx >= 0 and r_idx < len(events) - 1:
+                            for sub_ev in events[r_idx + 1:]:
+                                sub_agent = (
+                                    sub_ev.get("agent_id")
+                                    or (sub_ev.get("proposal") or {}).get("agent_id")
+                                    or (sub_ev.get("reader_id") if sub_ev.get("event") != "memory_read" else None)
+                                )
+                                if sub_agent == r_id:
+                                    is_effective = True
+                                    break
+                        else:
+                            # Terminal read in trace or synthetic unit test
+                            is_effective = True
+                        if is_effective:
+                            break
+
+                    # Rule 4 & 5: Effective bonus vs Harmful penalty
+                    # Harmful is grounded in true task failure and baseline comparison,
+                    # preventing normal exploration / slight score variance from being penalized.
+                    is_harmful = (not is_success) and (A < 0 or float(task_score) < float(same_task_baseline))
+
+                    if is_harmful:
+                        credit_val = A - lam * cost - dp - harmful_penalty
+                    elif outcome_gated and (not is_success or A <= 0):
+                        credit_val = A - lam * cost - dp
+                    elif is_effective and A > 0:
+                        t_bonus = target_bonus if is_target_hit else 0.0
+                        credit_val = A * (1.0 + b) + t_bonus - lam * cost - dp
+                    elif is_target_hit and is_success:
+                        credit_val = A + target_bonus - lam * cost - dp
+                    else:
+                        credit_val = A - lam * cost - dp
+
+        if pid:
+            credits[pid] = credit_val
+        if mid:
+            credits[mid] = credit_val
+
     return credits
+
+

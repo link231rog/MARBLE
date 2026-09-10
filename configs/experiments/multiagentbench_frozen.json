@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "seed": 42,
+  "benchmarks": ["database", "research"],
+  "splits": {
+    "train": [
+      {"benchmark": "database", "task_id": 1, "agent_count": 5},
+      {"benchmark": "database", "task_id": 2, "agent_count": 5},
+      {"benchmark": "database", "task_id": 3, "agent_count": 5},
+      {"benchmark": "research", "task_id": 1, "agent_count": 5},
+      {"benchmark": "research", "task_id": 3, "agent_count": 3},
+      {"benchmark": "research", "task_id": 4, "agent_count": 4}
+    ],
+    "test": [
+      {"benchmark": "database", "task_id": 4, "agent_count": 5},
+      {"benchmark": "database", "task_id": 5, "agent_count": 5},
+      {"benchmark": "database", "task_id": 6, "agent_count": 5},
+      {"benchmark": "database", "task_id": 7, "agent_count": 5},
+      {"benchmark": "database", "task_id": 8, "agent_count": 5},
+      {"benchmark": "database", "task_id": 9, "agent_count": 5},
+      {"benchmark": "database", "task_id": 10, "agent_count": 5},
+      {"benchmark": "database", "task_id": 11, "agent_count": 5},
+      {"benchmark": "database", "task_id": 12, "agent_count": 5},
+      {"benchmark": "research", "task_id": 2, "agent_count": 5},
+      {"benchmark": "research", "task_id": 5, "agent_count": 3},
+      {"benchmark": "research", "task_id": 6, "agent_count": 3},
+      {"benchmark": "research", "task_id": 7, "agent_count": 4},
+      {"benchmark": "research", "task_id": 21, "agent_count": 4},
+      {"benchmark": "research", "task_id": 22, "agent_count": 4},
+      {"benchmark": "research", "task_id": 8, "agent_count": 5},
+      {"benchmark": "research", "task_id": 23, "agent_count": 5},
+      {"benchmark": "research", "task_id": 28, "agent_count": 5}
+    ]
+  }
+}

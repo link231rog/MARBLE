@@ -52,6 +52,7 @@ def load_tasks(
                     engine_planner=dict(r.get("engine_planner", {})),
                     output=dict(r.get("output", {})),
                     llm=str(r.get("llm", "")),
+                    task_data=dict(r["task"]) if isinstance(r.get("task"), dict) else {"content": str(r.get("task", ""))},
                 )
             )
     if task_ids is not None:

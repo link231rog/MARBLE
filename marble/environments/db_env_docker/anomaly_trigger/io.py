@@ -11,11 +11,12 @@ def print_time():
 
 if __name__ == "__main__":
     print_time()
+    port = os.getenv("MARBLE_DB_PORT", "5432")
     command = (
         "su - root -c 'cd /sysbench-tpcc-master; "
         "./tpcc.lua --db-driver=pgsql --tables=2 --scale=3 --threads=50 --events=0 "
         "--pgsql-host=localhost --pgsql-user=test --pgsql-password=Test123_456 "
-        "--pgsql-port=5432 --pgsql-db=sysbench --time=90 --rand-type=uniform --report-interval=10 run'"
+        f"--pgsql-port={port} --pgsql-db=sysbench --time=90 --rand-type=uniform --report-interval=10 run'"
     )
 
     os.system(command)

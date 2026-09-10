@@ -224,9 +224,11 @@ class Engine:
                 "communications": [],
             }
             communications = []
+            print(f"[Engine] >>> Initial task distribution to {len(initial_tasks)} agents", flush=True)
             for agent_id, task in initial_tasks.items():
                 try:
                     agent = self.graph.get_agent(agent_id)
+                    print(f"[Engine] [Iter 0/{self.max_iterations}][{agent_id}] executing initial task...", flush=True)
                     self.logger.info(f"Assigning initial task to {agent_id}: {task}")
                     # Assign the task to the agent
                     iteration_data_task_assignments = iteration_data.get(
@@ -271,7 +273,7 @@ class Engine:
                 try:
                     with open("../data/score.json", "r") as f:
                         block_hit_rate = json.load(f)[-1]["block_hit_rate"]
-                except:
+                except Exception:
                     block_hit_rate = 0.0
                 self.logger.info(
                     f"Using a rule-based EnginePlanner. block_hit_rate is {block_hit_rate}"
@@ -332,6 +334,7 @@ class Engine:
                     "agent_kpis": {},
                 }
                 self.logger.info(f"Starting iteration {self.current_iteration}")
+                print(f"[Engine] >>> Starting iteration {self.current_iteration + 1}/{self.max_iterations}", flush=True)
 
                 current_agents = self.graph.get_all_agents()
                 current_tasks = {}
@@ -340,6 +343,7 @@ class Engine:
 
                 for agent in current_agents:
                     try:
+                        print(f"[Engine] [Iter {self.current_iteration + 1}/{self.max_iterations}][{agent.agent_id}] planning task...", flush=True)
                         # Each agent plans its own task
                         task = agent.plan_task()
                         current_tasks[agent.agent_id] = task
@@ -353,6 +357,7 @@ class Engine:
                         )
 
                         # Agent acts on the planned task
+                        print(f"[Engine] [Iter {self.current_iteration + 1}/{self.max_iterations}][{agent.agent_id}] executing action...", flush=True)
                         result, communication = agent.act(task)
                         self.logger.info(
                             f"Processing result for agent '{agent.agent_id}'"
@@ -416,7 +421,7 @@ class Engine:
                     try:
                         with open("../data/score.json", "r") as f:
                             block_hit_rate = json.load(f)[-1]["block_hit_rate"]
-                    except:
+                    except Exception:
                         block_hit_rate = 0.0
                     self.logger.info(
                         f"Using a rule-based EnginePlanner. block_hit_rate is {block_hit_rate}"
@@ -466,7 +471,7 @@ class Engine:
                 try:
                     with open("../data/score.json", "r") as f:
                         block_hit_rate = json.load(f)[-1]["block_hit_rate"]
-                except:
+                except Exception:
                     block_hit_rate = 0.0
                 summary_data["task_evaluation"] = block_hit_rate * 5
             elif self.environment.name == "DB Environment":

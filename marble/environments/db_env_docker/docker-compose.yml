@@ -8,14 +8,12 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     ports:
-      - 9090:9090
+      - "${MARBLE_PROM_PORT:-9090}:9090"
 
   postgres_db:
-    image: postgres
+    image: postgres:16-alpine
     ports:
-      - 5432:5432
-    volumes:
-      - /var/lib/postgresql/data
+      - "${MARBLE_DB_PORT:-5432}:5432"
     command: postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c max_connections=200 -c log_min_error_statement=info -c logging_collector=on
     environment:
       POSTGRES_USER: test
@@ -36,7 +34,7 @@ services:
       - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
       # - '--collector.filesystem.ignored-mount-points=^/run/user($$|/)'
     ports:
-      - 9100:9100
+      - "${MARBLE_NODE_PORT:-9100}:9100"
 
   pg_exporter:
     image: wrouesnel/postgres_exporter
@@ -44,4 +42,4 @@ services:
     environment:
       DATA_SOURCE_NAME: 'postgresql://test:Test123_456@postgres_db:5432/sysbench?sslmode=disable'
     ports:
-      - 9187:9187
+      - "${MARBLE_PG_EXPORTER_PORT:-9187}:9187"

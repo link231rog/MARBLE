@@ -1,14 +1,93 @@
 from __future__ import annotations
 
+import os
+import re
 from typing import List, Optional
 
 from .governed_memory import GovernedMemory
-from .schema import MemoryCard, MemoryProposal
+from .schema import MemoryCard, MemoryProposal, classify_topics
 
 
-def make_title(output: str, max_words: int = 16) -> str:
-    words = output.strip().split()
-    return " ".join(words[:max_words])
+def distill_proposal_output(
+    output: str,
+    max_title_words: int = 24,
+    worker_model: Optional[str] = None,
+) -> tuple[str, str]:
+    """Pure LLM-driven Memory Condenser.
+
+    Generates a high-quality, concise semantic summary key using the LLM,
+    with a graceful sentence-based fallback for offline/test environments.
+    """
+    output = output.strip()
+    if not output:
+        return "Empty observation", ""
+
+    # Strip wrapper prefixes
+    clean = re.sub(
+        r"^(?:Result from the (?:model|function)|As (?:an? )?[a-zA-Z0-9_]+):\s*",
+        "",
+        output,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # 1. Pure LLM Summary Key Generation (skipped during tests/offline mode)
+    model = worker_model or os.environ.get("MARBLE_WORKER_MODEL")
+    if model and not (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("MARBLE_OFFLINE_DISTILL")):
+        try:
+            from marble.llms.model_prompting import model_prompting
+
+            prompt = (
+                "Summarize the core diagnostic or research finding below into a single, concise "
+                f"title key (maximum {max_title_words} words). "
+                'Return ONLY a JSON object: {"summary_key": "your concise title key here"}.\n'
+                f"Finding:\n{clean[:1200]}"
+            )
+            resp = model_prompting(
+                llm_model=model,
+                messages=[{"role": "user", "content": prompt}],
+                return_num=1,
+                max_token_num=256,
+                temperature=0.0,
+            )[0]
+            raw_text = str(getattr(resp, "content", "") or "")
+            match = re.search(r'"summary_key"\s*:\s*"([^"]+)"', raw_text)
+            if match:
+                title = match.group(1).strip()
+                # Reject prompt echoes / template placeholders
+                is_placeholder = (
+                    (title.startswith("<") and title.endswith(">"))
+                    or "concise summary key" in title.lower()
+                    or "title key here" in title.lower()
+                    or title.lower() in ("summary key", "summary_key", "title", "none", "null")
+                )
+                if not is_placeholder and len(title) >= 3:
+                    words = title.split()
+                    if len(words) > max_title_words:
+                        title = " ".join(words[:max_title_words])
+                    return title, clean[:800]
+        except Exception:
+            pass
+
+    # 2. Deterministic Fallback (Offline / unit tests)
+    finding_match = re.search(
+        r"\[(?:Finding|Summary|Conclusion)\]:\s*([^\n]+)", clean, re.IGNORECASE
+    )
+    if finding_match:
+        words = finding_match.group(1).strip().split()
+        return " ".join(words[:max_title_words]), clean[:800]
+
+    sentences = [s.strip() for s in re.split(r"[.\n]+", clean) if len(s.strip()) > 5]
+    if sentences:
+        words = sentences[0].split()
+        return " ".join(words[:max_title_words]), clean[:800]
+
+    words = clean.split()
+    return " ".join(words[:max_title_words]), clean[:500]
+
+
+def make_title(output: str, max_words: int = 24) -> str:
+    title, _ = distill_proposal_output(output, max_title_words=max_words)
+    return title
 
 
 class MemoryAwareAgentAdapter:
@@ -45,6 +124,7 @@ class MemoryAwareAgentAdapter:
             title=make_title(output),
             raw_value=output,
             step_index=self._step_index,
+            topics=classify_topics(output),
         )
         item = self.memory.submit(proposal)
         return item.memory_id if item is not None else None

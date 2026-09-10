@@ -36,7 +36,8 @@ def restart_postgresql():
     # return
     try:
         os.chdir("..")
-        os.system("sudo docker compose restart postgres_db")
+        project = os.getenv("MARBLE_COMPOSE_PROJECT", "db_env_docker")
+        os.system(f"docker compose -p {project} restart postgres_db")
         print("PostgreSQL Service Rebooted")
     except Exception as e:
         print(f"Local command exec error: {e}")
@@ -61,9 +62,17 @@ def delete_table(table_name):
     db.execute_sqls(delete_sql)
 
 
+def _get_dataset_log_path() -> str:
+    return os.environ.get("MARBLE_DATASET_LOG", "dataset.txt")
+
+
+def _get_badsql_log_path() -> str:
+    return os.environ.get("MARBLE_BADSQL_LOG", "badsql.txt")
+
+
 # print the current time
 def print_start_time(cmd):
-    log_file = open("dataset.txt", "a")
+    log_file = open(_get_dataset_log_path(), "a")
     current_time = datetime.datetime.now()
     timestamp = current_time.timestamp()
     inttimestamp = int(timestamp)
@@ -74,7 +83,7 @@ def print_start_time(cmd):
 
 
 def print_end_time(cmd):
-    log_file = open("dataset.txt", "a")
+    log_file = open(_get_dataset_log_path(), "a")
     current_time = datetime.datetime.now()
     timestamp = current_time.timestamp()
     inttimestamp = int(timestamp)
@@ -86,7 +95,7 @@ def print_end_time(cmd):
 
 def write_anomaly_sql_to_file(text):
     try:
-        with open("badsql.txt", "a") as file:
+        with open(_get_badsql_log_path(), "a") as file:
             file.write(f"{text}\n")
         print("Text written to badsql.txt")
     except Exception as e:
@@ -95,7 +104,7 @@ def write_anomaly_sql_to_file(text):
 
 def write_anomaly_sql_to_file_a_line(text):
     try:
-        with open("badsql.txt", "a") as file:
+        with open(_get_badsql_log_path(), "a") as file:
             file.write(f"{text}\t\t")
         print("Text written to badsql.txt")
     except Exception as e:
@@ -104,7 +113,7 @@ def write_anomaly_sql_to_file_a_line(text):
 
 def write_space():
     try:
-        with open("badsql.txt", "a") as file:
+        with open(_get_badsql_log_path(), "a") as file:
             file.write("\n")
     except Exception as e:
         print(f"Error writting to file: {e}")
@@ -229,7 +238,7 @@ def vacuum(threads, duration, ncolumns, nrows, colsize, table_name="table1"):
         user="test",
         password="Test123_456",
         host="localhost",
-        port="5432",
+        port=os.getenv("MARBLE_DB_PORT", "5432"),
     )
     cur = conn.cursor()
     # Create a new table

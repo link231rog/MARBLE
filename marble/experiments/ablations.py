@@ -8,20 +8,21 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Dict
 
 from marble.memory.schema import MemoryProposal, MemoryTargetState
 
-FACTORS = ("policy", "schema_field", "retrieval", "state_update", "reward", "training", "input")
+FACTORS = (
+    "policy", "schema_field", "retrieval", "state_update", "reward",
+    "training", "input", "comm_gov", "visibility", "privacy"
+)
 
 SCHEMA_FIELDS = ("title", "value", "source", "agent_id", "task_id", "step_index")
 
 # Input-block ablation -> JsonController drop_fields (schema-and-reward.md §Input ablations)
 INPUT_ABLATIONS = {
-    "no_agent_tags": ("agent_capabilities",),
-    "no_topic_tags": ("topics",),
-    "no_memory_summary": ("memory_summary",),
-    "no_active_memory_index": ("active_memory_index",),
+    "no_task_goal": ("task_goal",),
+    "no_agent_tag": ("agent_tag",),
 }
 
 
@@ -34,7 +35,7 @@ def parse_ablation(spec: str) -> tuple:
 
 
 class NoSupersede:
-    """Wraps a controller; forces supersedes=None (state-update ablation)."""
+    """Wraps a controller; forces update=None/supersedes=None (state-update ablation)."""
 
     def __init__(self, inner):
         self.inner = inner
@@ -44,9 +45,41 @@ class NoSupersede:
         return MemoryTargetState(
             exists=target.exists,
             visibility=target.visibility,
-            owner_id=target.owner_id,
+            target_recipients=getattr(target, "target_recipients", ()),
             supersedes=None,
+            update=None,
         )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+NoUpdate = NoSupersede
+
+
+class PrivateToGlobal:
+    """Wraps a controller; forces any targeted/private visibility decision to global (spec §12.7.3)."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def decide(self, proposal: MemoryProposal, current_state) -> MemoryTargetState:
+        target = self.inner.decide(proposal, current_state)
+        vis = target.visibility
+        target_recipients = getattr(target, "target_recipients", ())
+        if vis in ("private", "targeted"):
+            vis = "global"
+            target_recipients = ()
+        return MemoryTargetState(
+            exists=target.exists,
+            visibility=vis,
+            target_recipients=target_recipients,
+            supersedes=target.supersedes,
+            update=target.update,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
 
 
 def apply_to_task_config(cfg: Dict[str, Any], factor: str, option: str) -> Dict[str, Any]:
@@ -58,6 +91,10 @@ def apply_to_task_config(cfg: Dict[str, Any], factor: str, option: str) -> Dict[
         cfg["memory"]["max_cards"] = 0
     elif factor == "state_update":
         cfg["memory"]["supersedes_enabled"] = option != "off"
+    elif factor == "comm_gov":
+        cfg["memory"]["comm_governor"] = option != "off"
+    elif factor in ("visibility", "privacy"):
+        cfg["memory"]["privacy_ablation"] = option
     cfg["memory"]["ablation"] = f"{factor}:{option}"
     return cfg
 
@@ -78,6 +115,8 @@ def controller_kwargs(factor: str, option: str) -> Dict[str, Any]:
 def wrap_controller(controller, factor: str, option: str):
     if factor == "state_update" and option == "off":
         return NoSupersede(controller)
+    if factor in ("visibility", "privacy") and option in ("private_to_global", "all_global", "off"):
+        return PrivateToGlobal(controller)
     return controller
 
 

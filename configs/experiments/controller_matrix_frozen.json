@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "date": "2026-09-04",
+  "description": "Chapter 2 Controller Evaluation Matrix: User-Designated Qwen 3.5 Base Controller with Scaling & Parallel Ablations.",
+  "serving_protocol": "openai_compatible_api",
+  "api_env_mapping": {
+    "api_base_env": [
+      "MARBLE_CONTROLLER_API_BASE",
+      "MARBLE_QWEN_API_BASE"
+    ],
+    "api_key_env": [
+      "MARBLE_CONTROLLER_API_KEY",
+      "MARBLE_QWEN_API_KEY"
+    ],
+    "api_model_env": [
+      "MARBLE_CONTROLLER_API_MODEL",
+      "MARBLE_QWEN_API_MODEL"
+    ]
+  },
+  "tiers": {
+    "tier_1_core": {
+      "description": "Base Controller: Full Train + Test evaluation for main paper baseline and RL cold start.",
+      "eval_splits": [
+        "train",
+        "test"
+      ],
+      "models": [
+        {
+          "id": "qwen3.5-4b",
+          "name": "Qwen/Qwen3.5-4B",
+          "parameters": "4B",
+          "role": "base_controller",
+          "purpose": "User-designated Core Base Controller (0.58s latency, 262k context, strict zero-syntax-error JSON)."
+        }
+      ]
+    },
+    "tier_2_ablation": {
+      "description": "Ablation on Test Split (16 tasks: 8 DB + 8 Research) for parameter scaling analysis.",
+      "eval_splits": [
+        "test"
+      ],
+      "models": [
+        {
+          "id": "qwen3.5-9b",
+          "name": "Qwen/Qwen3.5-9B",
+          "parameters": "9B",
+          "role": "scaling_larger",
+          "purpose": "Scale ablation: assess whether expanding parameters from 4B to 9B improves memory governance."
+        },
+        {
+          "id": "qwen3.5-27b",
+          "name": "Qwen/Qwen3.5-27B",
+          "parameters": "27B",
+          "role": "scaling_ceiling",
+          "purpose": "Scale ablation: test saturation ceiling of memory governance accuracy at 27B."
+        }
+      ]
+    }
+  }
+}

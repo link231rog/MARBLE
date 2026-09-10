@@ -20,21 +20,35 @@ def _llm(payload):
 def test_valid_global_decision():
     ctrl = JsonController(_llm({"visibility": "global", "supersedes": None}))
     target = ctrl.decide(_proposal(), [])
-    assert (target.exists, target.visibility, target.owner_id, target.supersedes) == (
-        True, "global", None, None)
+    assert (target.exists, target.visibility, target.supersedes) == (
+        True, "global", None)
     assert ctrl.rejections == []
 
 
-def test_private_supersedes_resolved_by_title():
+def test_private_supersedes_resolved_by_memory_id():
     bank = MemoryBank()
-    mem = GovernedMemory(bank, JsonController(_llm({"visibility": "private", "supersedes": None})))
+    role_map = {"coder": "developer"}
+    mem = GovernedMemory(bank, JsonController(_llm({"visibility": ["coder"], "supersedes": None}), agent_role_map=role_map))
     first = mem.submit(_proposal("p1"))
     assert first is not None
-    ctrl = JsonController(_llm({"visibility": "private", "supersedes": "shared result"}))
+    # review P2: supersedes resolves by exact memory_id only, not by title
+    ctrl = JsonController(_llm({"visibility": ["coder"], "supersedes": first.memory_id}), agent_role_map=role_map)
     items = [it for it in bank.all_items() if it.active]
     target = ctrl.decide(_proposal("p2"), items)
     assert target.supersedes == first.memory_id
-    assert target.owner_id == "coder"
+    assert target.target_recipients == ("coder",)
+
+
+def test_supersedes_by_title_is_rejected():
+    bank = MemoryBank()
+    role_map = {"coder": "developer"}
+    mem = GovernedMemory(bank, JsonController(_llm({"visibility": ["coder"], "supersedes": None}), agent_role_map=role_map))
+    mem.submit(_proposal("p1", title="shared result"))
+    ctrl = JsonController(_llm({"visibility": ["coder"], "supersedes": "shared result"}), agent_role_map=role_map)
+    items = [it for it in bank.all_items() if it.active]
+    target = ctrl.decide(_proposal("p2"), items)
+    assert target.visibility == "absent"  # title no longer resolves
+    assert "not found" in ctrl.rejections[-1]["reason"]
 
 
 def test_invalid_json_rejected_and_recorded():
@@ -64,22 +78,26 @@ def test_unknown_supersedes_target_rejected():
     assert "not found" in ctrl.rejections[0]["reason"]
 
 
-def test_prompt_follows_four_block_contract():
+def test_prompt_follows_frozen_system_and_three_block_contract():
     seen = {}
     def llm(prompt):
         seen["prompt"] = prompt
         return '{"visibility": "global", "supersedes": null}'
-    ctrl = JsonController(llm, max_value_chars=20,
-                          agent_capabilities=("coding",), task_goal="solve fizzbuzz")
+    ctrl = JsonController(
+        llm,
+        max_value_chars=20,
+        agent_role_map={"coder": "coding"},
+        task_goal="solve fizzbuzz",
+    )
     ctrl.decide(_proposal(value="x" * 100), [])
     p = seen["prompt"]
-    # four frozen input blocks present
-    for block in ("[TASK]", "[AGENT]", "[PROPOSAL]", "[ACTIVE MEMORY INDEX]"):
+    for block in ("[SYSTEM]", "[TASK]", "[PROPOSAL]", "[ACTIVE MEMORY INDEX]"):
         assert block in p
     assert "task_goal: solve fizzbuzz" in p
-    assert "agent_capabilities: ['coding']" in p
+    assert 'agent_role_map: {"coder": "coding"}' in p
+    assert "agent_reference: coder" in p
     # contract-excluded fields must NOT leak into the prompt
-    for forbidden in ("task_id:", "step_index:", "proposal_id:", "agent_id:"):
+    for forbidden in ("task_id:", "step_index:", "proposal_id:", "agent_capabilities:"):
         assert forbidden not in p
     # value truncation honored
     assert len(p.split("value: ", 1)[1].split("\n")[0]) <= 20
@@ -95,3 +113,62 @@ def test_input_ablation_hides_active_memory_index():
     assert "[ACTIVE MEMORY INDEX]" not in seen["prompt"]
     # ablation forces supersedes null even if model asks for it
     assert target.supersedes is None
+
+
+def test_visibility_set_routing():
+    role_map = {"agent_0": "Coder", "agent_1": "Reviewer", "agent_2": "Manager"}
+    ctrl = JsonController(
+        _llm({"visibility": ["agent_1"], "supersedes": None}),
+        agent_role_map=role_map,
+    )
+    prop = MemoryProposal(
+        proposal_id="p_cross", task_id="t", agent_id="agent_0", source="worker",
+        title="review feedback for reviewer", raw_value="Check line 42", step_index=1,
+    )
+    target = ctrl.decide(prop, [])
+    assert target.exists is True
+    assert target.visibility == "targeted"
+    assert target.target_recipients == ("agent_1",)
+
+    # Apply to bank
+    bank = MemoryBank()
+    item = bank.apply(prop, target)
+    assert item.target_recipients == ("agent_1",)
+    assert item.source_agent == "agent_0"
+
+    # agent_1 (in recipient list) can see it
+    visible_agent1 = [c.memory_id for c in bank.visible_keys(reader_id="agent_1", task_id="t")]
+    assert item.memory_id in visible_agent1
+
+    # agent_0 (producer, but NOT in recipient list) CANNOT see it
+    visible_agent0 = [c.memory_id for c in bank.visible_keys(reader_id="agent_0", task_id="t")]
+    assert item.memory_id not in visible_agent0
+
+    # agent_2 (unrelated) CANNOT see it
+    visible_agent2 = [c.memory_id for c in bank.visible_keys(reader_id="agent_2", task_id="t")]
+    assert item.memory_id not in visible_agent2
+
+
+def test_multi_agent_visibility_routing():
+    role_map = {"agent_0": "Coder", "agent_1": "Reviewer", "agent_2": "Manager"}
+    ctrl = JsonController(
+        _llm({"visibility": ["agent_0", "agent_1"], "supersedes": None}),
+        agent_role_map=role_map,
+    )
+    prop = MemoryProposal(
+        proposal_id="p_multi", task_id="t", agent_id="agent_0", source="worker",
+        title="joint discussion", raw_value="Check line 42", step_index=1,
+    )
+    target = ctrl.decide(prop, [])
+    assert target.exists is True
+    assert target.visibility == "targeted"
+    assert target.target_recipients == ("agent_0", "agent_1")
+
+    bank = MemoryBank()
+    item = bank.apply(prop, target)
+    # Both agent_0 and agent_1 can see it
+    assert "p_multi" in [c.memory_id for c in bank.visible_keys(reader_id="agent_0", task_id="t")]
+    assert "p_multi" in [c.memory_id for c in bank.visible_keys(reader_id="agent_1", task_id="t")]
+    # agent_2 cannot see it
+    assert "p_multi" not in [c.memory_id for c in bank.visible_keys(reader_id="agent_2", task_id="t")]
+

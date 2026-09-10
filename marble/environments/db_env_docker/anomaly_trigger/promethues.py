@@ -1,7 +1,10 @@
+import os
+
 import requests
 
 # Prometheus的API URL
-prometheus_api_url = "http://localhost:9090/api/v1/query"
+prom_port = os.getenv("MARBLE_PROM_PORT", "9090")
+prometheus_api_url = f"http://localhost:{prom_port}/api/v1/query"
 
 # 查询CPU使用率的PromQL，示例仅作为参考，具体查询可能需要调整
 cpu_query = '100 - (avg by (instance) (irate(node_cpu_seconds_total{instance="node_exporter:9100",mode="idle"}[5m])) * 100)'

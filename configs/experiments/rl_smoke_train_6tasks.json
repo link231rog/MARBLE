@@ -1,0 +1,13 @@
+{
+  "name": "rl_smoke_train_6tasks",
+  "splits": {
+    "train_hard": [
+      {"benchmark": "database", "task_id": 51, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "database", "task_id": 54, "agent_count": 5, "root_causes": ["VACUUM", "FETCH_LARGE_DATA"]},
+      {"benchmark": "research", "task_id": 10, "agent_count": 8, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "research", "task_id": 29, "agent_count": 8, "category": "cross_disciplinary_high_coordination"},
+      {"benchmark": "coding", "task_id": 51, "agent_count": 3, "category": "constraint_satisfaction_personalization"},
+      {"benchmark": "coding", "task_id": 52, "agent_count": 3, "category": "sequential_dependency_coordination"}
+    ]
+  }
+}

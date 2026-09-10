@@ -7,8 +7,50 @@ from ruamel.yaml import YAML
 from marble.llms.model_prompting import model_prompting
 
 
+def resolve_coding_task(env, task_description: str = "", model_name: str = "") -> tuple[str, str, str]:
+    """Dynamically resolve worker model name, full task description, and implementation requirements."""
+    configured_model = None
+    if hasattr(env, "config") and isinstance(env.config, dict):
+        configured_model = env.config.get("llm")
+    if not configured_model:
+        configured_model = os.environ.get("MARBLE_WORKER_MODEL")
+    if not model_name or model_name in ("gpt-3.5-turbo", "default"):
+        model_name = configured_model or "openai/nvidia/nemotron-3-super-120b-a12b"
+
+    full_task = None
+    if hasattr(env, "config") and isinstance(env.config, dict):
+        task_node = env.config.get("task")
+        if isinstance(task_node, dict) and "content" in task_node:
+            full_task = task_node["content"]
+        elif "task_content" in env.config:
+            full_task = env.config["task_content"]
+    if not full_task and task_description and task_description.strip():
+        full_task = task_description
+
+    if not full_task:
+        config_path = "marble/configs/coding_config/coding_config.yaml"
+        if os.path.exists(config_path):
+            yaml = YAML()
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.load(f)
+            full_task = config.get("task", {}).get("content", "")
+        else:
+            full_task = ""
+
+    req_start = "1. Implementation requirements:\n"
+    req_end = "\n\n2. Project structure:"
+    if full_task and req_start in full_task and req_end in full_task:
+        start_idx = full_task.find(req_start) + len(req_start)
+        end_idx = full_task.find(req_end)
+        reqs = full_task[start_idx:end_idx].strip()
+    else:
+        reqs = full_task
+
+    return model_name, full_task, reqs
+
+
 def create_solution_handler(
-    env, task_description: str, model_name: str, file_path: str = "solution.py"
+    env, task_description: str = "", model_name: str = "", file_path: str = "solution.py", **kwargs
 ) -> Dict[str, Any]:
     """
     Creates solution.py file and generates content based on task description.
@@ -32,30 +74,17 @@ def create_solution_handler(
         full_path = os.path.join(env.workspace_dir, file_path)
 
         if os.path.exists(full_path):
+            try:
+                os.remove(full_path)
+            except OSError:
+                pass
+
+        model_name, full_task_description, requirements = resolve_coding_task(env, task_description, model_name)
+        if not full_task_description:
             return {
                 "success": False,
-                "error-msg": f"Solution file already exists at {full_path}. Operation aborted.",
+                "error-msg": "Config file not found or task description is empty",
             }
-
-        config_path = "marble/configs/coding_config/coding_config.yaml"
-        if not os.path.exists(config_path):
-            return {
-                "success": False,
-                "error-msg": f"Config file not found at {config_path}",
-            }
-
-        yaml = YAML()
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.load(f)
-
-        full_task_description = config["task"]["content"]
-
-        requirements_start = "1. Implementation requirements:\n"
-        requirements_end = "\n\n2. Project structure:"
-        requirements = full_task_description[
-            full_task_description.find(requirements_start)
-            + len(requirements_start) : full_task_description.find(requirements_end)
-        ].strip()
 
         os.makedirs(env.workspace_dir, exist_ok=True)
 
@@ -78,17 +107,18 @@ def create_solution_handler(
                 {"role": "user", "content": user_prompt},
             ],
             return_num=1,
-            max_token_num=4096,
+            max_token_num=8192,
             temperature=0.0,
         )[0]
 
-        code_content = response.content
+        code_content = response.content.strip()
 
-        code_block_match = re.search(r"```python(.*?)```", code_content, re.DOTALL)
-        if code_block_match:
+        code_block_match = re.search(r"```(?:python)?\s*(.*?)(?:```|$)", code_content, re.DOTALL)
+        if code_block_match and code_block_match.group(1).strip():
             code_content = code_block_match.group(1).strip()
         else:
-            code_content = code_content.strip()
+            code_content = re.sub(r"^```(?:python)?\s*", "", code_content)
+            code_content = re.sub(r"\s*```$", "", code_content).strip()
 
         with open(full_path, "w") as file:
             file.write(code_content)
@@ -207,32 +237,70 @@ def register_coder_actions(env):
     """
     Register coding-related actions in the environment.
     """
+    default_model = "openai/nvidia/nemotron-3-super-120b-a12b"
+    if hasattr(env, "config") and isinstance(env.config, dict) and env.config.get("llm"):
+        default_model = env.config["llm"]
+    elif os.environ.get("MARBLE_WORKER_MODEL"):
+        default_model = os.environ["MARBLE_WORKER_MODEL"]
+
+    desc_solution = {
+        "type": "function",
+        "function": {
+            "name": "create_solution",
+            "description": "Creates solution.py file and generates content based on task description",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "Description of the task (will be read from config file)",
+                    },
+                    "model_name": {
+                        "type": "string",
+                        "description": "Name of the LLM model to use",
+                        "default": default_model,
+                    },
+                },
+                "required": ["task_description"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
     env.register_action(
         "create_solution",
         handler=lambda **kwargs: create_solution_handler(env, **kwargs),
-        description={
-            "type": "function",
-            "function": {
-                "name": "create_solution",
-                "description": "Creates solution.py file and generates content based on task description",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "task_description": {
-                            "type": "string",
-                            "description": "Description of the task (will be read from config file)",
-                        },
-                        "model_name": {
-                            "type": "string",
-                            "description": "Name of the LLM model to use",
-                            "default": "gpt-3.5-turbo",
-                        },
+        description=desc_solution,
+    )
+
+    desc_code = {
+        "type": "function",
+        "function": {
+            "name": "create_code",
+            "description": "Creates solution.py file and generates content based on task description (alias for create_solution)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "Description of the task (will be read from config file)",
                     },
-                    "required": ["task_description", "model_name"],
-                    "additionalProperties": False,
+                    "model_name": {
+                        "type": "string",
+                        "description": "Name of the LLM model to use",
+                        "default": default_model,
+                    },
                 },
+                "required": ["task_description"],
+                "additionalProperties": False,
             },
         },
+    }
+
+    env.register_action(
+        "create_code",
+        handler=lambda **kwargs: create_solution_handler(env, **kwargs),
+        description=desc_code,
     )
 
     # 如果需要，也可以类似地注册 revise_solution 动作（目前该函数为注释状态）

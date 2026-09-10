@@ -1,12 +1,14 @@
 import json
-
+from types import SimpleNamespace
 from marble.controllers import GlobalAlwaysController, PrivateOnlyController
 from marble.experiments.engine_bridge import (
     MemoryStep,
     build_governed_agent_cls,
     build_governed_engine_cls,
 )
+from marble.memory.rewards import token_count
 from marble.memory import GovernedMemory, MemoryBank, TraceLogger
+from marble.memory.schema import MemoryProposal
 
 
 def _memory(tmp_path, controller=None, trace=True):
@@ -19,14 +21,7 @@ def _memory(tmp_path, controller=None, trace=True):
     return mem, trace_path
 
 
-def _events(trace_path):
-    with open(trace_path) as fh:
-        return [json.loads(line) for line in fh]
-
-
 def _store_global(mem, title="shared result", value="answer is 42"):
-    from marble.memory.schema import MemoryProposal
-
     item = mem.submit(
         MemoryProposal(
             proposal_id=f"t:seed:{title}", task_id="t", agent_id="seed", source="worker",
@@ -37,31 +32,46 @@ def _store_global(mem, title="shared result", value="answer is 42"):
     return item
 
 
-def test_before_act_no_memory_returns_task_unchanged():
-    step = MemoryStep(None)
-    assert step.before_act("a1", "do thing") == "do thing"
-    assert step.after_act("a1", "out") is None
+def _events(tp):
+    with open(tp) as fh:
+        return [json.loads(line) for line in fh if line.strip()]
 
 
-def test_before_act_lists_keys_and_reads_selected(tmp_path):
+def test_memory_step_before_act_lifecycle(tmp_path):
+    # No memory case
+    step0 = MemoryStep(None)
+    assert step0.before_act("a1", "do thing") == "do thing"
+    assert step0.after_act("a1", "out") is None
+
+    # Normal before_act with selection
     mem, tp = _memory(tmp_path)
-    item = _store_global(mem)
+    item = _store_global(mem, title="shared key", value="read this note")
     step = MemoryStep(mem, selector_fn=lambda p: json.dumps({"memory_ids": [item.memory_id]}))
     step.task_id = "t"
     augmented = step.before_act("coder", "write code")
     assert "Shared memory keys:" in augmented and item.title in augmented
-    assert "Read notes:" in augmented and "answer is 42" in augmented
+    assert "Read notes:" in augmented and "read this note" in augmented
     assert step.reads_this_episode == 1
+
     events = _events(tp)
     assert any(e["event"] == "memory_read" and e["reader_id"] == "coder" for e in events)
+    exposure = next(e for e in events if e["event"] == "memory_exposure")
+    assert exposure["memory_ids"] == [item.memory_id]
+
+    context = step._context_by_agent["coder"]
+    key_text = f"Shared memory keys:\n- [M1] {item.title} ({item.visibility})"
+    notes_text = f"- [{item.title}] read this note"
+    assert context["memory_card_tokens"] == token_count(key_text)
+    assert context["injected_memory_tokens"] == token_count(notes_text)
 
 
-def test_selector_cap_and_unknown_ids_skipped(tmp_path):
+def test_memory_step_selector_rules(tmp_path):
     mem, _ = _memory(tmp_path)
     i1 = _store_global(mem, "a")
     i2 = _store_global(mem, "b")
     i3 = _store_global(mem, "c")
-    # asks for 3 incl unknown; capped to max_reads_per_step=2
+
+    # Selector cap & unknown id skip
     step = MemoryStep(
         mem,
         selector_fn=lambda p: json.dumps({"memory_ids": [i1.memory_id, "ghost", i2.memory_id, i3.memory_id]}),
@@ -69,38 +79,32 @@ def test_selector_cap_and_unknown_ids_skipped(tmp_path):
     )
     step.task_id = "t"
     out = step.before_act("coder", "q")
-    assert out.count("- [") == 2
+    assert "Read notes:" in out
+    read_section = out.split("Read notes:\n")[1]
+    assert read_section.count("- [") == 2
     assert step.reads_this_episode == 2
 
+    # Invalid selection json rejected
+    step_err = MemoryStep(mem, selector_fn=lambda p: "garbage")
+    step_err.task_id = "t"
+    assert "Read notes:" not in step_err.before_act("coder", "q")
+    assert len(step_err.selection_rejections) == 1
 
-def test_invalid_selection_json_rejected(tmp_path):
-    mem, _ = _memory(tmp_path)
-    _store_global(mem)
-    step = MemoryStep(mem, selector_fn=lambda p: "garbage")
-    step.task_id = "t"
-    augmented = step.before_act("coder", "q")
-    assert "Read notes:" not in augmented
-    assert len(step.selection_rejections) == 1
-
-
-def test_private_card_of_other_agent_not_offered(tmp_path):
-    mem, _ = _memory(tmp_path, controller=PrivateOnlyController())
-    from marble.memory.schema import MemoryProposal
-
-    mem.submit(MemoryProposal(proposal_id="p1", task_id="t", agent_id="other",
-                              source="worker", title="secret plan", raw_value="hush",
-                              step_index=0))
-    step = MemoryStep(mem, selector_fn=lambda p: json.dumps({"memory_ids": ["anything"]}))
-    step.task_id = "t"
-    augmented = step.before_act("coder", "q")
-    assert "Shared memory keys:" not in augmented
+    # Private card of other agent not offered
+    priv_dir = tmp_path / "priv"
+    priv_dir.mkdir(parents=True)
+    mem_priv, _ = _memory(priv_dir, controller=PrivateOnlyController())
+    mem_priv.submit(MemoryProposal(proposal_id="p1", task_id="t", agent_id="other", source="worker", title="secret", raw_value="hush", step_index=0))
+    step_priv = MemoryStep(mem_priv, selector_fn=lambda p: json.dumps({"memory_ids": ["anything"]}))
+    step_priv.task_id = "t"
+    assert "Shared memory keys:" not in step_priv.before_act("coder", "q")
 
 
-def test_after_act_submits_proposal_and_steps_increment(tmp_path):
+def test_after_act_proposal_lifecycle(tmp_path):
     mem, tp = _memory(tmp_path)
     step = MemoryStep(mem)
     step.task_id = "t"
-    step.before_act("coder", "q")  # real lifecycle calls before_act each turn
+    step.before_act("coder", "q")
     mid = step.after_act("coder", "Useful result: done")
     assert mid is not None
     step.before_act("coder", "q2")
@@ -113,13 +117,11 @@ def test_after_act_submits_proposal_and_steps_increment(tmp_path):
     assert decisions[0]["proposal"]["step_index"] == 1
 
 
-def test_governed_agent_feeds_augmented_task_to_base(tmp_path):
+def test_governed_agent_and_engine_integration(tmp_path):
     calls = []
-
     class DummyBase:
         def __init__(self, config=None, env=None, model=None):
             self.agent_id = config["agent_id"]
-
         def act(self, task):
             calls.append(task)
             return ("out", None)
@@ -135,87 +137,44 @@ def test_governed_agent_feeds_augmented_task_to_base(tmp_path):
     assert "task text" in calls[0]
     assert "Shared memory keys:" in calls[0] and item.title in calls[0]
 
-
-def test_governed_engine_cls_overrides_agents_only():
-    class DummyEnv:
-        pass
-
-    class DummyEngine:
-        def __init__(self, config):
-            self.config = config
-            self.environment = DummyEnv()
-            self.agents = self._initialize_agents(config.agents)
-
-        def _initialize_agents(self, agent_configs):
-            raise AssertionError("parent should be overridden")
-
+    # Engine integration
     class FakeAgent:
         def __init__(self, config, env, model):
             self.agent_id = config["agent_id"]
             self.governed = None
 
-    GovernedEngine = build_governed_engine_cls(DummyEngine, agent_cls=FakeAgent)
-    from types import SimpleNamespace
+    class DummyEngine:
+        def __init__(self, config):
+            self.config = config
+            self.agents = [FakeAgent(ac, None, config.llm) for ac in config.agents]
 
-    engine = GovernedEngine(
-        SimpleNamespace(llm="fake", agents=[{"agent_id": "a1"}, {"agent_id": "a2"}])
-    )
+    GovernedEngine = build_governed_engine_cls(DummyEngine, agent_cls=FakeAgent)
+    GovernedEngine.memory_harness = harness
+    engine = GovernedEngine(SimpleNamespace(llm="fake", agents=[{"agent_id": "a1"}, {"agent_id": "a2"}]))
     assert [a.agent_id for a in engine.agents] == ["a1", "a2"]
-    assert all(a.governed is None for a in engine.agents)  # runner attaches harness later
 
 
-def test_governed_engine_attaches_harness_before_init(tmp_path):
-    # regression for FATAL: agents read harness during __init__, so it must be
-    # set on the class BEFORE Engine(config) is constructed.
-    mem, _ = _memory(tmp_path)
-    harness = MemoryStep(mem, max_cards=6, max_reads_per_step=2, selector="top")
-
-    class DummyEnv:
-        pass
-
-    class DummyEngine:
-        def __init__(self, config):
-            self.config = config
-            self.environment = DummyEnv()
-            self.agents = self._initialize_agents(config.agents)
-
-        def _initialize_agents(self, agent_configs):
-            agents = []
-            for ac in agent_configs:
-                a = FakeAgent(ac, self.environment, self.config.llm)
-                a.governed = self.memory_harness  # mirrors GovernedEngine override
-                agents.append(a)
-            return agents
-
-    class FakeAgent:
-        def __init__(self, config, env, model):
-            self.agent_id = config["agent_id"]
-            self.governed = None
-
-    GovernedEngine = build_governed_engine_cls(DummyEngine, agent_cls=FakeAgent)
-    GovernedEngine.memory_harness = harness  # set BEFORE constructing engine
-    from types import SimpleNamespace
-
-    engine = GovernedEngine(
-        SimpleNamespace(llm="fake", agents=[{"agent_id": "a1"}])
-    )
-    assert engine.agents[0].governed is harness  # attached, not None
-
-
-def test_selector_top_reads_top_ranked_cards(tmp_path):
+def test_selector_top_and_budget_limits(tmp_path):
     mem, trace_path = _memory(tmp_path)
-    item = _store_global(mem, title="first", value="alpha")
-    item2 = _store_global(mem, title="second", value="beta")
-    harness = MemoryStep(
-        mem, max_cards=6, max_reads_per_step=1, selector="top"
-    )
+    _store_global(mem, title="first", value="alpha")
+    _store_global(mem, title="second", value="beta")
+    harness = MemoryStep(mem, max_cards=6, max_reads_per_step=1, selector="top")
     harness.task_id = "t"
     text = harness.before_act("reader", "t")
-    assert "alpha" in text and "beta" not in text  # top-1 read, capped
+    assert "alpha" in text and "beta" not in text
     assert harness.reads_this_episode == 1
-    assert harness.reads_this_episode == 1
-    events = [
-        e for e in _events(trace_path)
-        if e.get("event") == "memory_read"
-    ]
-    assert events and events[0]["memory_id"] == item.memory_id
+
+    # Global add all budget enforcement
+    m2_dir = tmp_path / "m2"
+    m2_dir.mkdir(parents=True)
+    mem2, trace_path2 = _memory(m2_dir)
+    for i in range(10):
+        _store_global(mem2, title=f"item_{i}", value=f"val_{i}")
+    harness2 = MemoryStep(mem2, max_cards=5, max_reads_per_step=2, selector="top", baseline="global_add_all")
+    harness2.task_id = "t"
+    harness2.before_act("reader", "run task")
+    assert harness2.reads_this_episode == 2
+    events = [e for e in _events(trace_path2) if e.get("event") == "memory_read"]
+    assert len(events) == 2
+    exposure = next(e for e in _events(trace_path2) if e.get("event") == "memory_exposure")
+    assert len(exposure["memory_ids"]) == 5

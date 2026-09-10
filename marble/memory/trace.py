@@ -26,7 +26,8 @@ class TraceLogger:
         self.log("memory_proposal", proposal=proposal.__dict__)
 
     def log_decision(self, proposal: Any, target: Any,
-                     memory_id: Optional[str] = None) -> None:
+                     memory_id: Optional[str] = None,
+                     **metadata: Any) -> None:
         record: Dict[str, Any] = {
             "event": "memory_decision",
             "proposal": proposal.__dict__,
@@ -34,12 +35,27 @@ class TraceLogger:
         }
         if memory_id is not None:
             record["memory_id"] = memory_id
+        record.update(metadata)
         self.log_record(record)
 
     def log_read(self, memory_id: str, reader_id: str, task_id: str) -> None:
         self.log(
             "memory_read",
             memory_id=memory_id,
+            reader_id=reader_id,
+            task_id=task_id,
+        )
+
+    def log_exposure(
+        self,
+        memory_ids: list[str],
+        reader_id: str,
+        task_id: str,
+    ) -> None:
+        """Record ranked key cards shown before any raw memory is read."""
+        self.log(
+            "memory_exposure",
+            memory_ids=memory_ids,
             reader_id=reader_id,
             task_id=task_id,
         )
